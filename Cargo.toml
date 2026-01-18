@@ -1,11 +1,11 @@
 [package]
 name = "bulk-renamer"
 version = "1.0.0"
-edition = "2021"
+edition = "2026"
 authors = ["Bulk Renamer Contributors"]
 description = "A GNOME-native bulk file renaming application"
 license = "MIT"
-repository = "https://github.com/bulk-renamer/bulk-renamer"
+repository = "https://github.com/christosdaggas/bulk-renamer"
 keywords = ["gnome", "gtk4", "rename", "files", "bulk"]
 categories = ["filesystem", "gui"]
 rust-version = "1.70"
