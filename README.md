@@ -2,7 +2,7 @@
 
 A powerful, GNOME-native bulk file renaming application written entirely in Rust.
 
-![Bulk Renamer](docs/screenshot.png)
+![Bulk Renamer](data/icons/hicolor/scalable/apps/com.chrisdaggas.bulk-renamer.svg)
 
 ## Features
 
