@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>com.chrisdaggas.bulk-renamer</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <name>Bulk Renamer</name>
+  <summary>Bulk rename files with powerful rules</summary>
+  <description>
+    <p>
+      Bulk Renamer is a powerful, GNOME-native bulk file renaming application
+      written in Rust. It provides an intuitive interface for renaming multiple
+      files using various rules.
+    </p>
+    <p>Features include:</p>
+    <ul>
+      <li>Find and replace text in filenames</li>
+      <li>Change case (lowercase, UPPERCASE, Title Case, etc.)</li>
+      <li>Insert text at various positions</li>
+      <li>Remove text patterns</li>
+      <li>Add sequential numbering</li>
+      <li>Insert date/time from file metadata</li>
+      <li>Preview changes before applying</li>
+      <li>Undo support</li>
+      <li>Save and load presets</li>
+    </ul>
+  </description>
+  <launchable type="desktop-id">com.chrisdaggas.bulk-renamer.desktop</launchable>
+  <url type="homepage">https://chrisdaggas.com</url>
+  <developer_name>Christos A. Daggas</developer_name>
+  <content_rating type="oars-1.1" />
+  <releases>
+    <release version="1.0.0" date="2026-01-06">
+      <description>
+        <p>Initial release of Bulk Renamer.</p>
+      </description>
+    </release>
+  </releases>
+  <screenshots>
+    <screenshot type="default">
+      <caption>Main window showing file list and rename rules</caption>
+      <image>https://chrisdaggas.com/gnome-renamer/screenshot.png</image>
+    </screenshot>
+  </screenshots>
+  <categories>
+    <category>Utility</category>
+    <category>FileTools</category>
+  </categories>
+  <keywords>
+    <keyword>rename</keyword>
+    <keyword>files</keyword>
+    <keyword>bulk</keyword>
+    <keyword>batch</keyword>
+  </keywords>
+</component>

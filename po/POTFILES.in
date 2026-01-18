@@ -1,0 +1,10 @@
+# List of source files containing translatable strings
+src/app.rs
+src/main.rs
+src/ui/dialogs.rs
+src/ui/file_list.rs
+src/ui/header.rs
+src/ui/preferences.rs
+src/ui/preview_panel.rs
+src/ui/rule_editor.rs
+src/ui/window.rs

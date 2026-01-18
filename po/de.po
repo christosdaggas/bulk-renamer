@@ -1,0 +1,646 @@
+# German translation for bulk-renamer.
+# Copyright (C) 2024-2026 Christos A. Daggas
+# This file is distributed under the same license as the bulk-renamer package.
+#
+msgid ""
+msgstr ""
+"Project-Id-Version: bulk-renamer 1.0.0\n"
+"Report-Msgid-Bugs-To: https://github.com/christosdaggas/bulk-renamer/issues\n"
+"POT-Creation-Date: 2026-01-06 12:00+0000\n"
+"PO-Revision-Date: 2026-01-06 12:00+0000\n"
+"Last-Translator: \n"
+"Language-Team: German\n"
+"Language: de\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=2; plural=(n != 1);\n"
+
+#: src/ui/window.rs:57 src/ui/window.rs:82
+msgid "Bulk Renamer"
+msgstr "Stapel-Umbenenner"
+
+#: src/ui/window.rs:90
+msgid "Rename"
+msgstr "Umbenennen"
+
+#: src/ui/window.rs:104
+msgid "Menu"
+msgstr "Menü"
+
+#: src/ui/window.rs:180
+msgid "System"
+msgstr "System"
+
+#: src/ui/window.rs:186
+msgid "Light"
+msgstr "Hell"
+
+#: src/ui/window.rs:192
+msgid "Dark"
+msgstr "Dunkel"
+
+#: src/ui/window.rs:298
+msgid "Presets"
+msgstr "Voreinstellungen"
+
+#: src/ui/window.rs:336
+msgid "Import from CSV…"
+msgstr "Aus CSV importieren…"
+
+#: src/ui/window.rs:351
+msgid "Export Log…"
+msgstr "Protokoll exportieren…"
+
+#: src/ui/window.rs:368
+msgid "About Bulk Renamer"
+msgstr "Über Stapel-Umbenenner"
+
+#: src/ui/window.rs:418
+msgid "Choose an action:"
+msgstr "Wählen Sie eine Aktion:"
+
+#: src/ui/window.rs:421
+msgid "Cancel"
+msgstr "Abbrechen"
+
+#: src/ui/window.rs:422
+msgid "Save Preset…"
+msgstr "Voreinstellung speichern…"
+
+#: src/ui/window.rs:423
+msgid "Load Preset…"
+msgstr "Voreinstellung laden…"
+
+#: src/ui/window.rs:438 src/ui/dialogs.rs:13
+msgid "A powerful bulk file renaming application for Linux"
+msgstr "Eine leistungsstarke Anwendung zum Stapel-Umbenennen von Dateien für Linux"
+
+#: src/ui/window.rs:442
+msgid "Created by"
+msgstr "Erstellt von"
+
+#: src/ui/window.rs:500
+msgid "Files"
+msgstr "Dateien"
+
+#: src/ui/window.rs:508
+msgid "Add Files"
+msgstr "Dateien hinzufügen"
+
+#: src/ui/window.rs:516
+msgid "Add Folder"
+msgstr "Ordner hinzufügen"
+
+#: src/ui/window.rs:523
+msgid "Clear All"
+msgstr "Alle löschen"
+
+#: src/ui/window.rs:543
+#, c-format
+msgid "%d files"
+msgstr "%d Dateien"
+
+#: src/ui/window.rs:548
+#, c-format
+msgid "%d selected"
+msgstr "%d ausgewählt"
+
+#: src/ui/window.rs:577
+msgid "No Files"
+msgstr "Keine Dateien"
+
+#: src/ui/window.rs:578
+msgid "Drop files here or click + to add"
+msgstr "Dateien hier ablegen oder auf + klicken zum Hinzufügen"
+
+#: src/ui/window.rs:600
+msgid "Select All"
+msgstr "Alle auswählen"
+
+#: src/ui/window.rs:606
+msgid "Remove Selected"
+msgstr "Ausgewählte entfernen"
+
+#: src/ui/window.rs:663
+msgid "Rules"
+msgstr "Regeln"
+
+#: src/ui/window.rs:673
+msgid "Add Rule"
+msgstr "Regel hinzufügen"
+
+#: src/ui/window.rs:687
+msgid "Apply to"
+msgstr "Anwenden auf"
+
+#: src/ui/window.rs:688
+msgid "Files only"
+msgstr "Nur Dateien"
+
+#: src/ui/window.rs:688
+msgid "Folders only"
+msgstr "Nur Ordner"
+
+#: src/ui/window.rs:688
+msgid "Both"
+msgstr "Beides"
+
+#: src/ui/window.rs:710
+msgid "No rules added"
+msgstr "Keine Regeln hinzugefügt"
+
+#: src/ui/window.rs:711
+msgid "Click + to add a rule"
+msgstr "Klicken Sie auf + um eine Regel hinzuzufügen"
+
+#: src/ui/window.rs:723
+msgid "Process extension separately"
+msgstr "Erweiterung separat verarbeiten"
+
+#: src/ui/window.rs:742
+msgid "Preview"
+msgstr "Vorschau"
+
+#: src/ui/window.rs:752
+msgid "Refresh Preview"
+msgstr "Vorschau aktualisieren"
+
+#: src/ui/window.rs:765
+#, c-format
+msgid "%d will be renamed"
+msgstr "%d wird umbenannt"
+
+#: src/ui/window.rs:783
+msgid "Original"
+msgstr "Original"
+
+#: src/ui/window.rs:790
+msgid "New Name"
+msgstr "Neuer Name"
+
+#: src/ui/window.rs:807
+msgid "Add files and rules to see preview"
+msgstr "Dateien und Regeln hinzufügen, um die Vorschau zu sehen"
+
+#: src/ui/window.rs:950
+msgid "Select Files"
+msgstr "Dateien auswählen"
+
+#: src/ui/window.rs:959
+msgid "Select Folder"
+msgstr "Ordner auswählen"
+
+#: src/ui/window.rs:1148
+msgid "Nothing to Rename"
+msgstr "Nichts zum Umbenennen"
+
+#: src/ui/window.rs:1148
+msgid "No files will be renamed with the current rules."
+msgstr "Mit den aktuellen Regeln werden keine Dateien umbenannt."
+
+#: src/ui/window.rs:1152
+msgid "Confirm Rename"
+msgstr "Umbenennung bestätigen"
+
+#: src/ui/window.rs:1153
+#, c-format
+msgid "Rename %d files?"
+msgstr "%d Dateien umbenennen?"
+
+#: src/ui/window.rs:1192
+msgid "Rename Complete"
+msgstr "Umbenennung abgeschlossen"
+
+#: src/ui/window.rs:1193
+#, c-format
+msgid "Successfully renamed %d files."
+msgstr "%d Dateien erfolgreich umbenannt."
+
+#: src/ui/window.rs:1198
+msgid "Rename Completed with Errors"
+msgstr "Umbenennung mit Fehlern abgeschlossen"
+
+#: src/ui/window.rs:1199
+#, c-format
+msgid "Renamed %d files successfully, %d failed."
+msgstr "%d Dateien erfolgreich umbenannt, %d fehlgeschlagen."
+
+#: src/ui/window.rs:1211
+msgid "OK"
+msgstr "OK"
+
+#: src/ui/window.rs:1222
+msgid "Add Rule"
+msgstr "Regel hinzufügen"
+
+#: src/ui/window.rs:1223
+msgid "Select the type of rule to add:"
+msgstr "Wählen Sie den Regeltyp aus:"
+
+#: src/ui/window.rs:1231
+msgid "Replace Text"
+msgstr "Text ersetzen"
+
+#: src/ui/window.rs:1231
+msgid "Find and replace text"
+msgstr "Text suchen und ersetzen"
+
+#: src/ui/window.rs:1232
+msgid "Change Case"
+msgstr "Groß-/Kleinschreibung ändern"
+
+#: src/ui/window.rs:1232
+msgid "UPPER, lower, Title Case"
+msgstr "GROSS, klein, Titel"
+
+#: src/ui/window.rs:1233
+msgid "Insert Text"
+msgstr "Text einfügen"
+
+#: src/ui/window.rs:1233
+msgid "Add text at position"
+msgstr "Text an Position hinzufügen"
+
+#: src/ui/window.rs:1234
+msgid "Remove Text"
+msgstr "Text entfernen"
+
+#: src/ui/window.rs:1234
+msgid "Remove characters or patterns"
+msgstr "Zeichen oder Muster entfernen"
+
+#: src/ui/window.rs:1235
+msgid "Numbering"
+msgstr "Nummerierung"
+
+#: src/ui/window.rs:1235
+msgid "Add sequential numbers"
+msgstr "Fortlaufende Nummern hinzufügen"
+
+#: src/ui/window.rs:1236
+msgid "Date/Time"
+msgstr "Datum/Uhrzeit"
+
+#: src/ui/window.rs:1236
+msgid "Insert date information"
+msgstr "Datumsinformationen einfügen"
+
+#: src/ui/window.rs:1280
+msgid "Replace"
+msgstr "Ersetzen"
+
+#: src/ui/window.rs:1322
+msgid "Find"
+msgstr "Suchen"
+
+#: src/ui/window.rs:1330
+msgid "Replace with"
+msgstr "Ersetzen durch"
+
+#: src/ui/window.rs:1337
+msgid "Options"
+msgstr "Optionen"
+
+#: src/ui/window.rs:1341
+msgid "Case sensitive"
+msgstr "Groß-/Kleinschreibung beachten"
+
+#: src/ui/window.rs:1347
+msgid "Use regular expressions"
+msgstr "Reguläre Ausdrücke verwenden"
+
+#: src/ui/window.rs:1353
+msgid "Replace all occurrences"
+msgstr "Alle Vorkommen ersetzen"
+
+#: src/ui/window.rs:1410
+#, c-format
+msgid "Remove \"%s\""
+msgstr "„%s" entfernen"
+
+#: src/ui/window.rs:1412
+#, c-format
+msgid "\"%s\" → \"%s\""
+msgstr "„%s" → „%s""
+
+#: src/ui/window.rs:1464
+msgid "Drag to reorder"
+msgstr "Ziehen zum Neuordnen"
+
+#: src/ui/window.rs:1519
+msgid "Edit rule"
+msgstr "Regel bearbeiten"
+
+#: src/ui/window.rs:1525
+msgid "Remove rule"
+msgstr "Regel entfernen"
+
+#: src/ui/window.rs:1648
+msgid "lowercase"
+msgstr "kleinbuchstaben"
+
+#: src/ui/window.rs:1649
+msgid "UPPERCASE"
+msgstr "GROSSBUCHSTABEN"
+
+#: src/ui/window.rs:1650
+msgid "Title Case"
+msgstr "Titel"
+
+#: src/ui/window.rs:1651
+msgid "Sentence case"
+msgstr "Satzanfang"
+
+#: src/ui/window.rs:1652
+msgid "snake_case"
+msgstr "snake_case"
+
+#: src/ui/window.rs:1653
+msgid "kebab-case"
+msgstr "kebab-case"
+
+#: src/ui/window.rs:1666
+msgid "All letters become lowercase"
+msgstr "Alle Buchstaben werden zu Kleinbuchstaben"
+
+#: src/ui/window.rs:1667
+msgid "All letters become uppercase"
+msgstr "Alle Buchstaben werden zu Großbuchstaben"
+
+#: src/ui/window.rs:1668
+msgid "First letter of each word uppercase"
+msgstr "Erster Buchstabe jedes Wortes groß"
+
+#: src/ui/window.rs:1669
+msgid "First letter uppercase, rest lowercase"
+msgstr "Erster Buchstabe groß, Rest klein"
+
+#: src/ui/window.rs:1670
+msgid "Words joined with underscores"
+msgstr "Wörter mit Unterstrichen verbunden"
+
+#: src/ui/window.rs:1671
+msgid "Words joined with hyphens"
+msgstr "Wörter mit Bindestrichen verbunden"
+
+#: src/ui/window.rs:1780
+msgid "First %d chars"
+msgstr "Erste %d Zeichen"
+
+#: src/ui/window.rs:1781
+msgid "Last %d chars"
+msgstr "Letzte %d Zeichen"
+
+#: src/ui/window.rs:1782
+msgid "All digits"
+msgstr "Alle Ziffern"
+
+#: src/ui/window.rs:1783
+msgid "All whitespace"
+msgstr "Alle Leerzeichen"
+
+#: src/ui/window.rs:1784
+msgid "Bracketed content"
+msgstr "Inhalt in Klammern"
+
+#: src/ui/window.rs:1786
+msgid "Custom rule"
+msgstr "Benutzerdefinierte Regel"
+
+#: src/ui/window.rs:1793
+#, c-format
+msgid "Start: %d, Pad: %d digits, %s"
+msgstr "Start: %d, Auffüllen: %d Ziffern, %s"
+
+#: src/ui/window.rs:1795
+msgid "prefix"
+msgstr "Präfix"
+
+#: src/ui/window.rs:1796
+msgid "suffix"
+msgstr "Suffix"
+
+#: src/ui/window.rs:1827
+msgid "Edit Replace Rule"
+msgstr "Ersetzungsregel bearbeiten"
+
+#: src/ui/window.rs:1844
+msgid "Save"
+msgstr "Speichern"
+
+#: src/ui/window.rs:1924
+msgid "Case Type"
+msgstr "Schreibweise"
+
+#: src/ui/window.rs:1939
+msgid "Convert to"
+msgstr "Umwandeln in"
+
+#: src/ui/window.rs:2096
+msgid "Text to insert"
+msgstr "Einzufügender Text"
+
+#: src/ui/window.rs:2107
+msgid "Position"
+msgstr "Position"
+
+#: src/ui/window.rs:2111
+msgid "Insert at"
+msgstr "Einfügen bei"
+
+#: src/ui/window.rs:2112
+msgid "Beginning (prefix)"
+msgstr "Anfang (Präfix)"
+
+#: src/ui/window.rs:2112
+msgid "End (suffix)"
+msgstr "Ende (Suffix)"
+
+#: src/ui/window.rs:2112
+msgid "At position"
+msgstr "An Position"
+
+#: src/ui/window.rs:2118
+msgid "Character position"
+msgstr "Zeichenposition"
+
+#: src/ui/window.rs:2188
+msgid "at beginning"
+msgstr "am Anfang"
+
+#: src/ui/window.rs:2189
+msgid "at end"
+msgstr "am Ende"
+
+#: src/ui/window.rs:2190
+#, c-format
+msgid "at position %d"
+msgstr "an Position %d"
+
+#: src/ui/window.rs:2209
+msgid "Insert"
+msgstr "Einfügen"
+
+#: src/ui/window.rs:2267
+msgid "Edit Insert Rule"
+msgstr "Einfügeregel bearbeiten"
+
+#: src/ui/window.rs:2356
+msgid "Remove"
+msgstr "Entfernen"
+
+#: src/ui/window.rs:2361
+msgid "Specific text"
+msgstr "Bestimmter Text"
+
+#: src/ui/window.rs:2362
+msgid "First N characters"
+msgstr "Erste N Zeichen"
+
+#: src/ui/window.rs:2363
+msgid "Last N characters"
+msgstr "Letzte N Zeichen"
+
+#: src/ui/window.rs:2366
+msgid "Bracketed content (…)"
+msgstr "Inhalt in Klammern (…)"
+
+#: src/ui/window.rs:2377
+msgid "Text to remove"
+msgstr "Zu entfernender Text"
+
+#: src/ui/window.rs:2386
+msgid "Number of characters"
+msgstr "Anzahl der Zeichen"
+
+#: src/ui/window.rs:2450
+#, c-format
+msgid "First %d characters"
+msgstr "Erste %d Zeichen"
+
+#: src/ui/window.rs:2451
+#, c-format
+msgid "Last %d characters"
+msgstr "Letzte %d Zeichen"
+
+#: src/ui/window.rs:2499
+msgid "Edit Remove Rule"
+msgstr "Entfernungsregel bearbeiten"
+
+#: src/ui/window.rs:2572
+msgid "Add Numbering"
+msgstr "Nummerierung hinzufügen"
+
+#: src/ui/window.rs:2598
+msgid "Start at"
+msgstr "Beginnen bei"
+
+#: src/ui/window.rs:2605
+msgid "Increment by"
+msgstr "Erhöhen um"
+
+#: src/ui/window.rs:2612
+msgid "Digits (zero-padding)"
+msgstr "Ziffern (mit Nullen auffüllen)"
+
+#: src/ui/window.rs:2635
+msgid "Separator"
+msgstr "Trennzeichen"
+
+#: src/ui/window.rs:2706
+msgid "Edit Numbering Rule"
+msgstr "Nummerierungsregel bearbeiten"
+
+#: src/ui/window.rs:2784
+msgid "Date source"
+msgstr "Datumsquelle"
+
+#: src/ui/window.rs:2785
+msgid "File modified date"
+msgstr "Änderungsdatum der Datei"
+
+#: src/ui/window.rs:2785
+msgid "File created date"
+msgstr "Erstellungsdatum der Datei"
+
+#: src/ui/window.rs:2785
+msgid "Current date"
+msgstr "Aktuelles Datum"
+
+#: src/ui/window.rs:2785
+msgid "EXIF date taken"
+msgstr "EXIF-Aufnahmedatum"
+
+#: src/ui/window.rs:2793
+msgid "Format"
+msgstr "Format"
+
+#: src/ui/window.rs:2797
+msgid "Date format"
+msgstr "Datumsformat"
+
+#: src/ui/window.rs:2862
+msgid "Modified date"
+msgstr "Änderungsdatum"
+
+#: src/ui/window.rs:2863
+msgid "Created date"
+msgstr "Erstellungsdatum"
+
+#: src/ui/window.rs:2904
+msgid "Save Preset"
+msgstr "Voreinstellung speichern"
+
+#: src/ui/window.rs:2905
+msgid "Enter a name for this preset:"
+msgstr "Geben Sie einen Namen für diese Voreinstellung ein:"
+
+#: src/ui/window.rs:2911
+msgid "Preset name"
+msgstr "Name der Voreinstellung"
+
+#: src/ui/window.rs:2927
+msgid "Import from CSV"
+msgstr "Aus CSV importieren"
+
+#: src/ui/window.rs:2937
+msgid "Export Log"
+msgstr "Protokoll exportieren"
+
+#: src/ui/window.rs:2209 src/ui/window.rs:2267
+msgid "Edit Change Case Rule"
+msgstr "Groß-/Kleinschreibungsregel bearbeiten"
+
+#: src/ui/dialogs.rs:26
+msgid "Confirm"
+msgstr "Bestätigen"
+
+#: src/ui/dialogs.rs:56
+msgid "Processing..."
+msgstr "Verarbeitung läuft…"
+
+#: src/ui/dialogs.rs:113
+msgid "Select Preset"
+msgstr "Voreinstellung auswählen"
+
+#: src/ui/dialogs.rs:113
+msgid "Choose a preset to apply:"
+msgstr "Wählen Sie eine Voreinstellung aus:"
+
+#: src/ui/dialogs.rs:131
+msgid "Apply"
+msgstr "Anwenden"
+
+#: src/ui/dialogs.rs:145
+msgid "Rename Failed"
+msgstr "Umbenennung fehlgeschlagen"
+
+#: src/ui/dialogs.rs:146
+#, c-format
+msgid "Failed to rename %d files."
+msgstr "Umbenennung von %d Dateien fehlgeschlagen."
+
+#: src/main.rs
+msgid "version"
+msgstr "Version"

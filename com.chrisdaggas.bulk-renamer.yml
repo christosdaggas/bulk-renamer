@@ -1,0 +1,70 @@
+# Bulk Renamer Cosmic - Flatpak Manifest
+# Build with: flatpak-builder --user --install --force-clean build-dir com.chrisdaggas.bulk-renamer.yml
+# Runtime: GNOME 47
+
+app-id: com.chrisdaggas.bulk-renamer
+runtime: org.gnome.Platform
+runtime-version: '47'
+sdk: org.gnome.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+
+command: bulk-renamer
+
+finish-args:
+  # X11 + XShm access (for X11 compatibility)
+  - --share=ipc
+  - --socket=fallback-x11
+  # Wayland access
+  - --socket=wayland
+  # GPU acceleration for GTK rendering
+  - --device=dri
+  # File system access for renaming files
+  - --filesystem=home
+  - --filesystem=/media
+  - --filesystem=/mnt
+  - --filesystem=/run/media
+  # D-Bus session bus for desktop integration
+  - --socket=session-bus
+  # Portal access for file dialogs
+  - --talk-name=org.freedesktop.portal.Desktop
+  - --talk-name=org.freedesktop.portal.FileChooser
+  # Notifications
+  - --talk-name=org.freedesktop.Notifications
+  # Settings (for dark mode detection)
+  - --talk-name=org.freedesktop.portal.Settings
+  # GTK settings
+  - --talk-name=org.gtk.Settings
+  # Environment for libadwaita
+  - --env=GTK_THEME=Adwaita
+
+build-options:
+  append-path: /usr/lib/sdk/rust-stable/bin
+  env:
+    CARGO_HOME: /run/build/bulk-renamer/cargo
+    RUST_BACKTRACE: '1'
+
+modules:
+  - name: bulk-renamer
+    buildsystem: simple
+    build-commands:
+      # Build the application
+      - cargo build --release --offline
+      # Install binary
+      - install -Dm755 target/release/bulk-renamer /app/bin/bulk-renamer
+      # Install desktop file
+      - install -Dm644 data/com.chrisdaggas.bulk-renamer.desktop /app/share/applications/com.chrisdaggas.bulk-renamer.desktop
+      # Install metainfo
+      - install -Dm644 data/com.chrisdaggas.bulk-renamer.metainfo.xml /app/share/metainfo/com.chrisdaggas.bulk-renamer.metainfo.xml
+      # Install icons
+      - install -Dm644 data/icons/hicolor/scalable/apps/com.chrisdaggas.bulk-renamer.svg /app/share/icons/hicolor/scalable/apps/com.chrisdaggas.bulk-renamer.svg
+      # Install GResource if exists
+      - |
+        if [ -f data/resources/bulk-renamer.gresource ]; then
+          install -Dm644 data/resources/bulk-renamer.gresource /app/share/bulk-renamer/bulk-renamer.gresource
+        fi
+    sources:
+      - type: dir
+        path: .
+      # Cargo sources generated with flatpak-cargo-generator
+      - cargo-sources.json

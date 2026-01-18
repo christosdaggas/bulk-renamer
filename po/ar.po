@@ -1,0 +1,646 @@
+# Arabic translation for bulk-renamer.
+# Copyright (C) 2024-2026 Christos A. Daggas
+# This file is distributed under the same license as the bulk-renamer package.
+#
+msgid ""
+msgstr ""
+"Project-Id-Version: bulk-renamer 1.0.0\n"
+"Report-Msgid-Bugs-To: https://github.com/christosdaggas/bulk-renamer/issues\n"
+"POT-Creation-Date: 2026-01-06 12:00+0000\n"
+"PO-Revision-Date: 2026-01-07 12:00+0000\n"
+"Last-Translator: \n"
+"Language-Team: Arabic\n"
+"Language: ar\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=6; plural=n==0 ? 0 : n==1 ? 1 : n==2 ? 2 : n%100>=3 && n%100<=10 ? 3 : n%100>=11 ? 4 : 5;\n"
+
+#: src/ui/window.rs:57 src/ui/window.rs:82
+msgid "Bulk Renamer"
+msgstr "مُعيد التسمية المجمّع"
+
+#: src/ui/window.rs:90
+msgid "Rename"
+msgstr "إعادة تسمية"
+
+#: src/ui/window.rs:104
+msgid "Menu"
+msgstr "القائمة"
+
+#: src/ui/window.rs:180
+msgid "System"
+msgstr "النظام"
+
+#: src/ui/window.rs:186
+msgid "Light"
+msgstr "فاتح"
+
+#: src/ui/window.rs:192
+msgid "Dark"
+msgstr "داكن"
+
+#: src/ui/window.rs:298
+msgid "Presets"
+msgstr "الإعدادات المسبقة"
+
+#: src/ui/window.rs:336
+msgid "Import from CSV…"
+msgstr "استيراد من CSV…"
+
+#: src/ui/window.rs:351
+msgid "Export Log…"
+msgstr "تصدير السجل…"
+
+#: src/ui/window.rs:368
+msgid "About Bulk Renamer"
+msgstr "حول مُعيد التسمية المجمّع"
+
+#: src/ui/window.rs:418
+msgid "Choose an action:"
+msgstr "اختر إجراءً:"
+
+#: src/ui/window.rs:421
+msgid "Cancel"
+msgstr "إلغاء"
+
+#: src/ui/window.rs:422
+msgid "Save Preset…"
+msgstr "حفظ الإعداد المسبق…"
+
+#: src/ui/window.rs:423
+msgid "Load Preset…"
+msgstr "تحميل الإعداد المسبق…"
+
+#: src/ui/window.rs:438 src/ui/dialogs.rs:13
+msgid "A powerful bulk file renaming application for Linux"
+msgstr "تطبيق قوي لإعادة تسمية الملفات بشكل مجمّع لنظام Linux"
+
+#: src/ui/window.rs:442
+msgid "Created by"
+msgstr "تم إنشاؤه بواسطة"
+
+#: src/ui/window.rs:500
+msgid "Files"
+msgstr "الملفات"
+
+#: src/ui/window.rs:508
+msgid "Add Files"
+msgstr "إضافة ملفات"
+
+#: src/ui/window.rs:516
+msgid "Add Folder"
+msgstr "إضافة مجلد"
+
+#: src/ui/window.rs:523
+msgid "Clear All"
+msgstr "مسح الكل"
+
+#: src/ui/window.rs:543
+#, c-format
+msgid "%d files"
+msgstr "%d ملف"
+
+#: src/ui/window.rs:548
+#, c-format
+msgid "%d selected"
+msgstr "%d مُحدد"
+
+#: src/ui/window.rs:577
+msgid "No Files"
+msgstr "لا توجد ملفات"
+
+#: src/ui/window.rs:578
+msgid "Drop files here or click + to add"
+msgstr "اسحب الملفات هنا أو انقر + للإضافة"
+
+#: src/ui/window.rs:600
+msgid "Select All"
+msgstr "تحديد الكل"
+
+#: src/ui/window.rs:606
+msgid "Remove Selected"
+msgstr "إزالة المُحدد"
+
+#: src/ui/window.rs:663
+msgid "Rules"
+msgstr "القواعد"
+
+#: src/ui/window.rs:673
+msgid "Add Rule"
+msgstr "إضافة قاعدة"
+
+#: src/ui/window.rs:687
+msgid "Apply to"
+msgstr "تطبيق على"
+
+#: src/ui/window.rs:688
+msgid "Files only"
+msgstr "الملفات فقط"
+
+#: src/ui/window.rs:688
+msgid "Folders only"
+msgstr "المجلدات فقط"
+
+#: src/ui/window.rs:688
+msgid "Both"
+msgstr "كلاهما"
+
+#: src/ui/window.rs:710
+msgid "No rules added"
+msgstr "لم تُضف قواعد"
+
+#: src/ui/window.rs:711
+msgid "Click + to add a rule"
+msgstr "انقر + لإضافة قاعدة"
+
+#: src/ui/window.rs:723
+msgid "Process extension separately"
+msgstr "معالجة الامتداد بشكل منفصل"
+
+#: src/ui/window.rs:742
+msgid "Preview"
+msgstr "معاينة"
+
+#: src/ui/window.rs:752
+msgid "Refresh Preview"
+msgstr "تحديث المعاينة"
+
+#: src/ui/window.rs:765
+#, c-format
+msgid "%d will be renamed"
+msgstr "سيتم إعادة تسمية %d"
+
+#: src/ui/window.rs:783
+msgid "Original"
+msgstr "الأصلي"
+
+#: src/ui/window.rs:790
+msgid "New Name"
+msgstr "الاسم الجديد"
+
+#: src/ui/window.rs:807
+msgid "Add files and rules to see preview"
+msgstr "أضف ملفات وقواعد لرؤية المعاينة"
+
+#: src/ui/window.rs:950
+msgid "Select Files"
+msgstr "اختيار الملفات"
+
+#: src/ui/window.rs:959
+msgid "Select Folder"
+msgstr "اختيار مجلد"
+
+#: src/ui/window.rs:1148
+msgid "Nothing to Rename"
+msgstr "لا شيء لإعادة تسميته"
+
+#: src/ui/window.rs:1148
+msgid "No files will be renamed with the current rules."
+msgstr "لن يتم إعادة تسمية أي ملفات بالقواعد الحالية."
+
+#: src/ui/window.rs:1152
+msgid "Confirm Rename"
+msgstr "تأكيد إعادة التسمية"
+
+#: src/ui/window.rs:1153
+#, c-format
+msgid "Rename %d files?"
+msgstr "إعادة تسمية %d ملف؟"
+
+#: src/ui/window.rs:1192
+msgid "Rename Complete"
+msgstr "اكتملت إعادة التسمية"
+
+#: src/ui/window.rs:1193
+#, c-format
+msgid "Successfully renamed %d files."
+msgstr "تمت إعادة تسمية %d ملف بنجاح."
+
+#: src/ui/window.rs:1198
+msgid "Rename Completed with Errors"
+msgstr "اكتملت إعادة التسمية مع أخطاء"
+
+#: src/ui/window.rs:1199
+#, c-format
+msgid "Renamed %d files successfully, %d failed."
+msgstr "تمت إعادة تسمية %d ملف بنجاح، فشل %d."
+
+#: src/ui/window.rs:1211
+msgid "OK"
+msgstr "موافق"
+
+#: src/ui/window.rs:1222
+msgid "Add Rule"
+msgstr "إضافة قاعدة"
+
+#: src/ui/window.rs:1223
+msgid "Select the type of rule to add:"
+msgstr "اختر نوع القاعدة للإضافة:"
+
+#: src/ui/window.rs:1231
+msgid "Replace Text"
+msgstr "استبدال النص"
+
+#: src/ui/window.rs:1231
+msgid "Find and replace text"
+msgstr "البحث والاستبدال"
+
+#: src/ui/window.rs:1232
+msgid "Change Case"
+msgstr "تغيير الحالة"
+
+#: src/ui/window.rs:1232
+msgid "UPPER, lower, Title Case"
+msgstr "كبير، صغير، حالة العنوان"
+
+#: src/ui/window.rs:1233
+msgid "Insert Text"
+msgstr "إدراج نص"
+
+#: src/ui/window.rs:1233
+msgid "Add text at position"
+msgstr "إضافة نص في موضع"
+
+#: src/ui/window.rs:1234
+msgid "Remove Text"
+msgstr "إزالة النص"
+
+#: src/ui/window.rs:1234
+msgid "Remove characters or patterns"
+msgstr "إزالة الأحرف أو الأنماط"
+
+#: src/ui/window.rs:1235
+msgid "Numbering"
+msgstr "الترقيم"
+
+#: src/ui/window.rs:1235
+msgid "Add sequential numbers"
+msgstr "إضافة أرقام متسلسلة"
+
+#: src/ui/window.rs:1236
+msgid "Date/Time"
+msgstr "التاريخ/الوقت"
+
+#: src/ui/window.rs:1236
+msgid "Insert date information"
+msgstr "إدراج معلومات التاريخ"
+
+#: src/ui/window.rs:1280
+msgid "Replace"
+msgstr "استبدال"
+
+#: src/ui/window.rs:1322
+msgid "Find"
+msgstr "بحث"
+
+#: src/ui/window.rs:1330
+msgid "Replace with"
+msgstr "استبدال بـ"
+
+#: src/ui/window.rs:1337
+msgid "Options"
+msgstr "الخيارات"
+
+#: src/ui/window.rs:1341
+msgid "Case sensitive"
+msgstr "حساس لحالة الأحرف"
+
+#: src/ui/window.rs:1347
+msgid "Use regular expressions"
+msgstr "استخدام التعبيرات النمطية"
+
+#: src/ui/window.rs:1353
+msgid "Replace all occurrences"
+msgstr "استبدال جميع التكرارات"
+
+#: src/ui/window.rs:1410
+#, c-format
+msgid "Remove \"%s\""
+msgstr "إزالة \"%s\""
+
+#: src/ui/window.rs:1412
+#, c-format
+msgid "\"%s\" → \"%s\""
+msgstr "\"%s\" → \"%s\""
+
+#: src/ui/window.rs:1464
+msgid "Drag to reorder"
+msgstr "اسحب لإعادة الترتيب"
+
+#: src/ui/window.rs:1519
+msgid "Edit rule"
+msgstr "تحرير القاعدة"
+
+#: src/ui/window.rs:1525
+msgid "Remove rule"
+msgstr "إزالة القاعدة"
+
+#: src/ui/window.rs:1648
+msgid "lowercase"
+msgstr "أحرف صغيرة"
+
+#: src/ui/window.rs:1649
+msgid "UPPERCASE"
+msgstr "أحرف كبيرة"
+
+#: src/ui/window.rs:1650
+msgid "Title Case"
+msgstr "حالة العنوان"
+
+#: src/ui/window.rs:1651
+msgid "Sentence case"
+msgstr "حالة الجملة"
+
+#: src/ui/window.rs:1652
+msgid "snake_case"
+msgstr "snake_case"
+
+#: src/ui/window.rs:1653
+msgid "kebab-case"
+msgstr "kebab-case"
+
+#: src/ui/window.rs:1666
+msgid "All letters become lowercase"
+msgstr "تصبح جميع الأحرف صغيرة"
+
+#: src/ui/window.rs:1667
+msgid "All letters become uppercase"
+msgstr "تصبح جميع الأحرف كبيرة"
+
+#: src/ui/window.rs:1668
+msgid "First letter of each word uppercase"
+msgstr "الحرف الأول من كل كلمة كبير"
+
+#: src/ui/window.rs:1669
+msgid "First letter uppercase, rest lowercase"
+msgstr "الحرف الأول كبير، الباقي صغير"
+
+#: src/ui/window.rs:1670
+msgid "Words joined with underscores"
+msgstr "الكلمات مرتبطة بشرطات سفلية"
+
+#: src/ui/window.rs:1671
+msgid "Words joined with hyphens"
+msgstr "الكلمات مرتبطة بشرطات"
+
+#: src/ui/window.rs:1780
+msgid "First %d chars"
+msgstr "أول %d حرف"
+
+#: src/ui/window.rs:1781
+msgid "Last %d chars"
+msgstr "آخر %d حرف"
+
+#: src/ui/window.rs:1782
+msgid "All digits"
+msgstr "جميع الأرقام"
+
+#: src/ui/window.rs:1783
+msgid "All whitespace"
+msgstr "جميع المسافات"
+
+#: src/ui/window.rs:1784
+msgid "Bracketed content"
+msgstr "المحتوى بين الأقواس"
+
+#: src/ui/window.rs:1786
+msgid "Custom rule"
+msgstr "قاعدة مخصصة"
+
+#: src/ui/window.rs:1793
+#, c-format
+msgid "Start: %d, Pad: %d digits, %s"
+msgstr "البداية: %d، الحشو: %d أرقام، %s"
+
+#: src/ui/window.rs:1795
+msgid "prefix"
+msgstr "بادئة"
+
+#: src/ui/window.rs:1796
+msgid "suffix"
+msgstr "لاحقة"
+
+#: src/ui/window.rs:1827
+msgid "Edit Replace Rule"
+msgstr "تحرير قاعدة الاستبدال"
+
+#: src/ui/window.rs:1844
+msgid "Save"
+msgstr "حفظ"
+
+#: src/ui/window.rs:1924
+msgid "Case Type"
+msgstr "نوع الحالة"
+
+#: src/ui/window.rs:1939
+msgid "Convert to"
+msgstr "تحويل إلى"
+
+#: src/ui/window.rs:2096
+msgid "Text to insert"
+msgstr "النص للإدراج"
+
+#: src/ui/window.rs:2107
+msgid "Position"
+msgstr "الموضع"
+
+#: src/ui/window.rs:2111
+msgid "Insert at"
+msgstr "إدراج في"
+
+#: src/ui/window.rs:2112
+msgid "Beginning (prefix)"
+msgstr "البداية (بادئة)"
+
+#: src/ui/window.rs:2112
+msgid "End (suffix)"
+msgstr "النهاية (لاحقة)"
+
+#: src/ui/window.rs:2112
+msgid "At position"
+msgstr "في الموضع"
+
+#: src/ui/window.rs:2118
+msgid "Character position"
+msgstr "موضع الحرف"
+
+#: src/ui/window.rs:2188
+msgid "at beginning"
+msgstr "في البداية"
+
+#: src/ui/window.rs:2189
+msgid "at end"
+msgstr "في النهاية"
+
+#: src/ui/window.rs:2190
+#, c-format
+msgid "at position %d"
+msgstr "في الموضع %d"
+
+#: src/ui/window.rs:2209
+msgid "Insert"
+msgstr "إدراج"
+
+#: src/ui/window.rs:2267
+msgid "Edit Insert Rule"
+msgstr "تحرير قاعدة الإدراج"
+
+#: src/ui/window.rs:2356
+msgid "Remove"
+msgstr "إزالة"
+
+#: src/ui/window.rs:2361
+msgid "Specific text"
+msgstr "نص محدد"
+
+#: src/ui/window.rs:2362
+msgid "First N characters"
+msgstr "أول N حرف"
+
+#: src/ui/window.rs:2363
+msgid "Last N characters"
+msgstr "آخر N حرف"
+
+#: src/ui/window.rs:2366
+msgid "Bracketed content (…)"
+msgstr "المحتوى بين الأقواس (…)"
+
+#: src/ui/window.rs:2377
+msgid "Text to remove"
+msgstr "النص للإزالة"
+
+#: src/ui/window.rs:2386
+msgid "Number of characters"
+msgstr "عدد الأحرف"
+
+#: src/ui/window.rs:2450
+#, c-format
+msgid "First %d characters"
+msgstr "أول %d حرف"
+
+#: src/ui/window.rs:2451
+#, c-format
+msgid "Last %d characters"
+msgstr "آخر %d حرف"
+
+#: src/ui/window.rs:2499
+msgid "Edit Remove Rule"
+msgstr "تحرير قاعدة الإزالة"
+
+#: src/ui/window.rs:2572
+msgid "Add Numbering"
+msgstr "إضافة الترقيم"
+
+#: src/ui/window.rs:2598
+msgid "Start at"
+msgstr "البدء من"
+
+#: src/ui/window.rs:2605
+msgid "Increment by"
+msgstr "الزيادة بـ"
+
+#: src/ui/window.rs:2612
+msgid "Digits (zero-padding)"
+msgstr "الأرقام (حشو الصفر)"
+
+#: src/ui/window.rs:2635
+msgid "Separator"
+msgstr "الفاصل"
+
+#: src/ui/window.rs:2706
+msgid "Edit Numbering Rule"
+msgstr "تحرير قاعدة الترقيم"
+
+#: src/ui/window.rs:2784
+msgid "Date source"
+msgstr "مصدر التاريخ"
+
+#: src/ui/window.rs:2785
+msgid "File modified date"
+msgstr "تاريخ تعديل الملف"
+
+#: src/ui/window.rs:2785
+msgid "File created date"
+msgstr "تاريخ إنشاء الملف"
+
+#: src/ui/window.rs:2785
+msgid "Current date"
+msgstr "التاريخ الحالي"
+
+#: src/ui/window.rs:2785
+msgid "EXIF date taken"
+msgstr "تاريخ EXIF للالتقاط"
+
+#: src/ui/window.rs:2793
+msgid "Format"
+msgstr "التنسيق"
+
+#: src/ui/window.rs:2797
+msgid "Date format"
+msgstr "تنسيق التاريخ"
+
+#: src/ui/window.rs:2862
+msgid "Modified date"
+msgstr "تاريخ التعديل"
+
+#: src/ui/window.rs:2863
+msgid "Created date"
+msgstr "تاريخ الإنشاء"
+
+#: src/ui/window.rs:2904
+msgid "Save Preset"
+msgstr "حفظ الإعداد المسبق"
+
+#: src/ui/window.rs:2905
+msgid "Enter a name for this preset:"
+msgstr "أدخل اسماً لهذا الإعداد المسبق:"
+
+#: src/ui/window.rs:2911
+msgid "Preset name"
+msgstr "اسم الإعداد المسبق"
+
+#: src/ui/window.rs:2927
+msgid "Import from CSV"
+msgstr "استيراد من CSV"
+
+#: src/ui/window.rs:2937
+msgid "Export Log"
+msgstr "تصدير السجل"
+
+#: src/ui/window.rs:2209 src/ui/window.rs:2267
+msgid "Edit Change Case Rule"
+msgstr "تحرير قاعدة تغيير الحالة"
+
+#: src/ui/dialogs.rs:26
+msgid "Confirm"
+msgstr "تأكيد"
+
+#: src/ui/dialogs.rs:56
+msgid "Processing..."
+msgstr "جارٍ المعالجة..."
+
+#: src/ui/dialogs.rs:113
+msgid "Select Preset"
+msgstr "اختيار الإعداد المسبق"
+
+#: src/ui/dialogs.rs:113
+msgid "Choose a preset to apply:"
+msgstr "اختر إعداداً مسبقاً للتطبيق:"
+
+#: src/ui/dialogs.rs:131
+msgid "Apply"
+msgstr "تطبيق"
+
+#: src/ui/dialogs.rs:145
+msgid "Rename Failed"
+msgstr "فشلت إعادة التسمية"
+
+#: src/ui/dialogs.rs:146
+#, c-format
+msgid "Failed to rename %d files."
+msgstr "فشل في إعادة تسمية %d ملف."
+
+#: src/main.rs
+msgid "version"
+msgstr "الإصدار"

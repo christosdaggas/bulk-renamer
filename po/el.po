@@ -1,0 +1,646 @@
+# Greek translation for bulk-renamer.
+# Copyright (C) 2024-2026 Christos A. Daggas
+# This file is distributed under the same license as the bulk-renamer package.
+#
+msgid ""
+msgstr ""
+"Project-Id-Version: bulk-renamer 1.0.0\n"
+"Report-Msgid-Bugs-To: https://github.com/christosdaggas/bulk-renamer/issues\n"
+"POT-Creation-Date: 2026-01-06 12:00+0000\n"
+"PO-Revision-Date: 2026-01-06 12:00+0000\n"
+"Last-Translator: \n"
+"Language-Team: Greek\n"
+"Language: el\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=2; plural=(n != 1);\n"
+
+#: src/ui/window.rs:57 src/ui/window.rs:82
+msgid "Bulk Renamer"
+msgstr "Μαζική μετονομασία"
+
+#: src/ui/window.rs:90
+msgid "Rename"
+msgstr "Μετονομασία"
+
+#: src/ui/window.rs:104
+msgid "Menu"
+msgstr "Μενού"
+
+#: src/ui/window.rs:180
+msgid "System"
+msgstr "Σύστημα"
+
+#: src/ui/window.rs:186
+msgid "Light"
+msgstr "Φωτεινό"
+
+#: src/ui/window.rs:192
+msgid "Dark"
+msgstr "Σκοτεινό"
+
+#: src/ui/window.rs:298
+msgid "Presets"
+msgstr "Προρυθμίσεις"
+
+#: src/ui/window.rs:336
+msgid "Import from CSV…"
+msgstr "Εισαγωγή από CSV…"
+
+#: src/ui/window.rs:351
+msgid "Export Log…"
+msgstr "Εξαγωγή αρχείου καταγραφής…"
+
+#: src/ui/window.rs:368
+msgid "About Bulk Renamer"
+msgstr "Σχετικά με τη Μαζική μετονομασία"
+
+#: src/ui/window.rs:418
+msgid "Choose an action:"
+msgstr "Επιλέξτε μια ενέργεια:"
+
+#: src/ui/window.rs:421
+msgid "Cancel"
+msgstr "Ακύρωση"
+
+#: src/ui/window.rs:422
+msgid "Save Preset…"
+msgstr "Αποθήκευση προρύθμισης…"
+
+#: src/ui/window.rs:423
+msgid "Load Preset…"
+msgstr "Φόρτωση προρύθμισης…"
+
+#: src/ui/window.rs:438 src/ui/dialogs.rs:13
+msgid "A powerful bulk file renaming application for Linux"
+msgstr "Μια ισχυρή εφαρμογή μαζικής μετονομασίας αρχείων για Linux"
+
+#: src/ui/window.rs:442
+msgid "Created by"
+msgstr "Δημιουργήθηκε από"
+
+#: src/ui/window.rs:500
+msgid "Files"
+msgstr "Αρχεία"
+
+#: src/ui/window.rs:508
+msgid "Add Files"
+msgstr "Προσθήκη αρχείων"
+
+#: src/ui/window.rs:516
+msgid "Add Folder"
+msgstr "Προσθήκη φακέλου"
+
+#: src/ui/window.rs:523
+msgid "Clear All"
+msgstr "Εκκαθάριση όλων"
+
+#: src/ui/window.rs:543
+#, c-format
+msgid "%d files"
+msgstr "%d αρχεία"
+
+#: src/ui/window.rs:548
+#, c-format
+msgid "%d selected"
+msgstr "%d επιλεγμένα"
+
+#: src/ui/window.rs:577
+msgid "No Files"
+msgstr "Κανένα αρχείο"
+
+#: src/ui/window.rs:578
+msgid "Drop files here or click + to add"
+msgstr "Σύρετε αρχεία εδώ ή πατήστε + για προσθήκη"
+
+#: src/ui/window.rs:600
+msgid "Select All"
+msgstr "Επιλογή όλων"
+
+#: src/ui/window.rs:606
+msgid "Remove Selected"
+msgstr "Αφαίρεση επιλεγμένων"
+
+#: src/ui/window.rs:663
+msgid "Rules"
+msgstr "Κανόνες"
+
+#: src/ui/window.rs:673
+msgid "Add Rule"
+msgstr "Προσθήκη κανόνα"
+
+#: src/ui/window.rs:687
+msgid "Apply to"
+msgstr "Εφαρμογή σε"
+
+#: src/ui/window.rs:688
+msgid "Files only"
+msgstr "Μόνο αρχεία"
+
+#: src/ui/window.rs:688
+msgid "Folders only"
+msgstr "Μόνο φακέλους"
+
+#: src/ui/window.rs:688
+msgid "Both"
+msgstr "Και τα δύο"
+
+#: src/ui/window.rs:710
+msgid "No rules added"
+msgstr "Δεν έχουν προστεθεί κανόνες"
+
+#: src/ui/window.rs:711
+msgid "Click + to add a rule"
+msgstr "Πατήστε + για να προσθέσετε κανόνα"
+
+#: src/ui/window.rs:723
+msgid "Process extension separately"
+msgstr "Επεξεργασία επέκτασης χωριστά"
+
+#: src/ui/window.rs:742
+msgid "Preview"
+msgstr "Προεπισκόπηση"
+
+#: src/ui/window.rs:752
+msgid "Refresh Preview"
+msgstr "Ανανέωση προεπισκόπησης"
+
+#: src/ui/window.rs:765
+#, c-format
+msgid "%d will be renamed"
+msgstr "%d θα μετονομαστούν"
+
+#: src/ui/window.rs:783
+msgid "Original"
+msgstr "Αρχικό"
+
+#: src/ui/window.rs:790
+msgid "New Name"
+msgstr "Νέο όνομα"
+
+#: src/ui/window.rs:807
+msgid "Add files and rules to see preview"
+msgstr "Προσθέστε αρχεία και κανόνες για προεπισκόπηση"
+
+#: src/ui/window.rs:950
+msgid "Select Files"
+msgstr "Επιλογή αρχείων"
+
+#: src/ui/window.rs:959
+msgid "Select Folder"
+msgstr "Επιλογή φακέλου"
+
+#: src/ui/window.rs:1148
+msgid "Nothing to Rename"
+msgstr "Τίποτα προς μετονομασία"
+
+#: src/ui/window.rs:1148
+msgid "No files will be renamed with the current rules."
+msgstr "Κανένα αρχείο δεν θα μετονομαστεί με τους τρέχοντες κανόνες."
+
+#: src/ui/window.rs:1152
+msgid "Confirm Rename"
+msgstr "Επιβεβαίωση μετονομασίας"
+
+#: src/ui/window.rs:1153
+#, c-format
+msgid "Rename %d files?"
+msgstr "Μετονομασία %d αρχείων;"
+
+#: src/ui/window.rs:1192
+msgid "Rename Complete"
+msgstr "Η μετονομασία ολοκληρώθηκε"
+
+#: src/ui/window.rs:1193
+#, c-format
+msgid "Successfully renamed %d files."
+msgstr "Μετονομάστηκαν επιτυχώς %d αρχεία."
+
+#: src/ui/window.rs:1198
+msgid "Rename Completed with Errors"
+msgstr "Η μετονομασία ολοκληρώθηκε με σφάλματα"
+
+#: src/ui/window.rs:1199
+#, c-format
+msgid "Renamed %d files successfully, %d failed."
+msgstr "%d αρχεία μετονομάστηκαν επιτυχώς, %d απέτυχαν."
+
+#: src/ui/window.rs:1211
+msgid "OK"
+msgstr "Εντάξει"
+
+#: src/ui/window.rs:1222
+msgid "Add Rule"
+msgstr "Προσθήκη κανόνα"
+
+#: src/ui/window.rs:1223
+msgid "Select the type of rule to add:"
+msgstr "Επιλέξτε τον τύπο κανόνα για προσθήκη:"
+
+#: src/ui/window.rs:1231
+msgid "Replace Text"
+msgstr "Αντικατάσταση κειμένου"
+
+#: src/ui/window.rs:1231
+msgid "Find and replace text"
+msgstr "Εύρεση και αντικατάσταση κειμένου"
+
+#: src/ui/window.rs:1232
+msgid "Change Case"
+msgstr "Αλλαγή πεζών/κεφαλαίων"
+
+#: src/ui/window.rs:1232
+msgid "UPPER, lower, Title Case"
+msgstr "ΚΕΦΑΛΑΙΑ, πεζά, Πεζοκεφαλαία"
+
+#: src/ui/window.rs:1233
+msgid "Insert Text"
+msgstr "Εισαγωγή κειμένου"
+
+#: src/ui/window.rs:1233
+msgid "Add text at position"
+msgstr "Προσθήκη κειμένου σε θέση"
+
+#: src/ui/window.rs:1234
+msgid "Remove Text"
+msgstr "Αφαίρεση κειμένου"
+
+#: src/ui/window.rs:1234
+msgid "Remove characters or patterns"
+msgstr "Αφαίρεση χαρακτήρων ή μοτίβων"
+
+#: src/ui/window.rs:1235
+msgid "Numbering"
+msgstr "Αρίθμηση"
+
+#: src/ui/window.rs:1235
+msgid "Add sequential numbers"
+msgstr "Προσθήκη διαδοχικών αριθμών"
+
+#: src/ui/window.rs:1236
+msgid "Date/Time"
+msgstr "Ημερομηνία/Ώρα"
+
+#: src/ui/window.rs:1236
+msgid "Insert date information"
+msgstr "Εισαγωγή πληροφοριών ημερομηνίας"
+
+#: src/ui/window.rs:1280
+msgid "Replace"
+msgstr "Αντικατάσταση"
+
+#: src/ui/window.rs:1322
+msgid "Find"
+msgstr "Εύρεση"
+
+#: src/ui/window.rs:1330
+msgid "Replace with"
+msgstr "Αντικατάσταση με"
+
+#: src/ui/window.rs:1337
+msgid "Options"
+msgstr "Επιλογές"
+
+#: src/ui/window.rs:1341
+msgid "Case sensitive"
+msgstr "Διάκριση πεζών/κεφαλαίων"
+
+#: src/ui/window.rs:1347
+msgid "Use regular expressions"
+msgstr "Χρήση κανονικών εκφράσεων"
+
+#: src/ui/window.rs:1353
+msgid "Replace all occurrences"
+msgstr "Αντικατάσταση όλων των εμφανίσεων"
+
+#: src/ui/window.rs:1410
+#, c-format
+msgid "Remove \"%s\""
+msgstr "Αφαίρεση «%s»"
+
+#: src/ui/window.rs:1412
+#, c-format
+msgid "\"%s\" → \"%s\""
+msgstr "«%s» → «%s»"
+
+#: src/ui/window.rs:1464
+msgid "Drag to reorder"
+msgstr "Σύρετε για αναδιάταξη"
+
+#: src/ui/window.rs:1519
+msgid "Edit rule"
+msgstr "Επεξεργασία κανόνα"
+
+#: src/ui/window.rs:1525
+msgid "Remove rule"
+msgstr "Αφαίρεση κανόνα"
+
+#: src/ui/window.rs:1648
+msgid "lowercase"
+msgstr "πεζά"
+
+#: src/ui/window.rs:1649
+msgid "UPPERCASE"
+msgstr "ΚΕΦΑΛΑΙΑ"
+
+#: src/ui/window.rs:1650
+msgid "Title Case"
+msgstr "Πεζοκεφαλαία"
+
+#: src/ui/window.rs:1651
+msgid "Sentence case"
+msgstr "Κεφαλαίο αρχής"
+
+#: src/ui/window.rs:1652
+msgid "snake_case"
+msgstr "snake_case"
+
+#: src/ui/window.rs:1653
+msgid "kebab-case"
+msgstr "kebab-case"
+
+#: src/ui/window.rs:1666
+msgid "All letters become lowercase"
+msgstr "Όλα τα γράμματα γίνονται πεζά"
+
+#: src/ui/window.rs:1667
+msgid "All letters become uppercase"
+msgstr "Όλα τα γράμματα γίνονται κεφαλαία"
+
+#: src/ui/window.rs:1668
+msgid "First letter of each word uppercase"
+msgstr "Πρώτο γράμμα κάθε λέξης κεφαλαίο"
+
+#: src/ui/window.rs:1669
+msgid "First letter uppercase, rest lowercase"
+msgstr "Πρώτο γράμμα κεφαλαίο, υπόλοιπα πεζά"
+
+#: src/ui/window.rs:1670
+msgid "Words joined with underscores"
+msgstr "Λέξεις ενωμένες με κάτω παύλες"
+
+#: src/ui/window.rs:1671
+msgid "Words joined with hyphens"
+msgstr "Λέξεις ενωμένες με παύλες"
+
+#: src/ui/window.rs:1780
+msgid "First %d chars"
+msgstr "Πρώτοι %d χαρακτήρες"
+
+#: src/ui/window.rs:1781
+msgid "Last %d chars"
+msgstr "Τελευταίοι %d χαρακτήρες"
+
+#: src/ui/window.rs:1782
+msgid "All digits"
+msgstr "Όλα τα ψηφία"
+
+#: src/ui/window.rs:1783
+msgid "All whitespace"
+msgstr "Όλα τα κενά"
+
+#: src/ui/window.rs:1784
+msgid "Bracketed content"
+msgstr "Περιεχόμενο σε παρενθέσεις"
+
+#: src/ui/window.rs:1786
+msgid "Custom rule"
+msgstr "Προσαρμοσμένος κανόνας"
+
+#: src/ui/window.rs:1793
+#, c-format
+msgid "Start: %d, Pad: %d digits, %s"
+msgstr "Αρχή: %d, Συμπλήρωση: %d ψηφία, %s"
+
+#: src/ui/window.rs:1795
+msgid "prefix"
+msgstr "πρόθεμα"
+
+#: src/ui/window.rs:1796
+msgid "suffix"
+msgstr "επίθεμα"
+
+#: src/ui/window.rs:1827
+msgid "Edit Replace Rule"
+msgstr "Επεξεργασία κανόνα αντικατάστασης"
+
+#: src/ui/window.rs:1844
+msgid "Save"
+msgstr "Αποθήκευση"
+
+#: src/ui/window.rs:1924
+msgid "Case Type"
+msgstr "Τύπος πεζών/κεφαλαίων"
+
+#: src/ui/window.rs:1939
+msgid "Convert to"
+msgstr "Μετατροπή σε"
+
+#: src/ui/window.rs:2096
+msgid "Text to insert"
+msgstr "Κείμενο προς εισαγωγή"
+
+#: src/ui/window.rs:2107
+msgid "Position"
+msgstr "Θέση"
+
+#: src/ui/window.rs:2111
+msgid "Insert at"
+msgstr "Εισαγωγή στο"
+
+#: src/ui/window.rs:2112
+msgid "Beginning (prefix)"
+msgstr "Αρχή (πρόθεμα)"
+
+#: src/ui/window.rs:2112
+msgid "End (suffix)"
+msgstr "Τέλος (επίθεμα)"
+
+#: src/ui/window.rs:2112
+msgid "At position"
+msgstr "Στη θέση"
+
+#: src/ui/window.rs:2118
+msgid "Character position"
+msgstr "Θέση χαρακτήρα"
+
+#: src/ui/window.rs:2188
+msgid "at beginning"
+msgstr "στην αρχή"
+
+#: src/ui/window.rs:2189
+msgid "at end"
+msgstr "στο τέλος"
+
+#: src/ui/window.rs:2190
+#, c-format
+msgid "at position %d"
+msgstr "στη θέση %d"
+
+#: src/ui/window.rs:2209
+msgid "Insert"
+msgstr "Εισαγωγή"
+
+#: src/ui/window.rs:2267
+msgid "Edit Insert Rule"
+msgstr "Επεξεργασία κανόνα εισαγωγής"
+
+#: src/ui/window.rs:2356
+msgid "Remove"
+msgstr "Αφαίρεση"
+
+#: src/ui/window.rs:2361
+msgid "Specific text"
+msgstr "Συγκεκριμένο κείμενο"
+
+#: src/ui/window.rs:2362
+msgid "First N characters"
+msgstr "Πρώτοι N χαρακτήρες"
+
+#: src/ui/window.rs:2363
+msgid "Last N characters"
+msgstr "Τελευταίοι N χαρακτήρες"
+
+#: src/ui/window.rs:2366
+msgid "Bracketed content (…)"
+msgstr "Περιεχόμενο σε παρενθέσεις (…)"
+
+#: src/ui/window.rs:2377
+msgid "Text to remove"
+msgstr "Κείμενο προς αφαίρεση"
+
+#: src/ui/window.rs:2386
+msgid "Number of characters"
+msgstr "Αριθμός χαρακτήρων"
+
+#: src/ui/window.rs:2450
+#, c-format
+msgid "First %d characters"
+msgstr "Πρώτοι %d χαρακτήρες"
+
+#: src/ui/window.rs:2451
+#, c-format
+msgid "Last %d characters"
+msgstr "Τελευταίοι %d χαρακτήρες"
+
+#: src/ui/window.rs:2499
+msgid "Edit Remove Rule"
+msgstr "Επεξεργασία κανόνα αφαίρεσης"
+
+#: src/ui/window.rs:2572
+msgid "Add Numbering"
+msgstr "Προσθήκη αρίθμησης"
+
+#: src/ui/window.rs:2598
+msgid "Start at"
+msgstr "Έναρξη από"
+
+#: src/ui/window.rs:2605
+msgid "Increment by"
+msgstr "Αύξηση κατά"
+
+#: src/ui/window.rs:2612
+msgid "Digits (zero-padding)"
+msgstr "Ψηφία (συμπλήρωση με μηδενικά)"
+
+#: src/ui/window.rs:2635
+msgid "Separator"
+msgstr "Διαχωριστικό"
+
+#: src/ui/window.rs:2706
+msgid "Edit Numbering Rule"
+msgstr "Επεξεργασία κανόνα αρίθμησης"
+
+#: src/ui/window.rs:2784
+msgid "Date source"
+msgstr "Προέλευση ημερομηνίας"
+
+#: src/ui/window.rs:2785
+msgid "File modified date"
+msgstr "Ημερομηνία τροποποίησης αρχείου"
+
+#: src/ui/window.rs:2785
+msgid "File created date"
+msgstr "Ημερομηνία δημιουργίας αρχείου"
+
+#: src/ui/window.rs:2785
+msgid "Current date"
+msgstr "Τρέχουσα ημερομηνία"
+
+#: src/ui/window.rs:2785
+msgid "EXIF date taken"
+msgstr "Ημερομηνία λήψης EXIF"
+
+#: src/ui/window.rs:2793
+msgid "Format"
+msgstr "Μορφή"
+
+#: src/ui/window.rs:2797
+msgid "Date format"
+msgstr "Μορφή ημερομηνίας"
+
+#: src/ui/window.rs:2862
+msgid "Modified date"
+msgstr "Ημερομηνία τροποποίησης"
+
+#: src/ui/window.rs:2863
+msgid "Created date"
+msgstr "Ημερομηνία δημιουργίας"
+
+#: src/ui/window.rs:2904
+msgid "Save Preset"
+msgstr "Αποθήκευση προρύθμισης"
+
+#: src/ui/window.rs:2905
+msgid "Enter a name for this preset:"
+msgstr "Εισάγετε όνομα για αυτή την προρύθμιση:"
+
+#: src/ui/window.rs:2911
+msgid "Preset name"
+msgstr "Όνομα προρύθμισης"
+
+#: src/ui/window.rs:2927
+msgid "Import from CSV"
+msgstr "Εισαγωγή από CSV"
+
+#: src/ui/window.rs:2937
+msgid "Export Log"
+msgstr "Εξαγωγή αρχείου καταγραφής"
+
+#: src/ui/window.rs:2209 src/ui/window.rs:2267
+msgid "Edit Change Case Rule"
+msgstr "Επεξεργασία κανόνα πεζών/κεφαλαίων"
+
+#: src/ui/dialogs.rs:26
+msgid "Confirm"
+msgstr "Επιβεβαίωση"
+
+#: src/ui/dialogs.rs:56
+msgid "Processing..."
+msgstr "Επεξεργασία…"
+
+#: src/ui/dialogs.rs:113
+msgid "Select Preset"
+msgstr "Επιλογή προρύθμισης"
+
+#: src/ui/dialogs.rs:113
+msgid "Choose a preset to apply:"
+msgstr "Επιλέξτε μια προρύθμιση για εφαρμογή:"
+
+#: src/ui/dialogs.rs:131
+msgid "Apply"
+msgstr "Εφαρμογή"
+
+#: src/ui/dialogs.rs:145
+msgid "Rename Failed"
+msgstr "Αποτυχία μετονομασίας"
+
+#: src/ui/dialogs.rs:146
+#, c-format
+msgid "Failed to rename %d files."
+msgstr "Αποτυχία μετονομασίας %d αρχείων."
+
+#: src/main.rs
+msgid "version"
+msgstr "έκδοση"

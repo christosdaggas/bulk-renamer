@@ -1,0 +1,98 @@
+// Expression Grammar for Bulk Renamer
+// This defines a simple but powerful expression language for filename manipulation
+
+WHITESPACE = _{ " " | "\t" }
+
+// Main expression is a template with embedded expressions
+expression = { SOI ~ template ~ EOI }
+template = { (template_part)* }
+template_part = { placeholder | literal }
+
+// Placeholders: ${...}
+placeholder = { "${" ~ inner_expr ~ "}" }
+
+// Literal text (anything not a placeholder start)
+literal = @{ (!("${") ~ ANY)+ }
+
+// Inner expressions within placeholders
+inner_expr = { function_call | variable | string_literal | number }
+
+// Variables (built-in values)
+variable = @{ 
+    "name" | "stem" | "ext" | "extension" |
+    "parent" | "grandparent" | "path" |
+    "size" | "created" | "modified" | "accessed" |
+    "index" | "counter" | "total" |
+    "year" | "month" | "day" | "hour" | "minute" | "second" |
+    "width" | "height" |
+    "artist" | "album" | "title" | "track" | "genre" |
+    "camera" | "iso" | "aperture" | "focal"
+}
+
+// Function calls: func(args)
+function_call = { function_name ~ "(" ~ args? ~ ")" }
+function_name = @{ ASCII_ALPHA ~ (ASCII_ALPHANUMERIC | "_")* }
+
+// Arguments
+args = { arg ~ ("," ~ arg)* }
+arg = { inner_expr }
+
+// Literals
+string_literal = { "\"" ~ string_inner ~ "\"" | "'" ~ string_inner_sq ~ "'" }
+string_inner = @{ (!("\"") ~ ANY)* }
+string_inner_sq = @{ (!("'") ~ ANY)* }
+
+number = @{ "-"? ~ ASCII_DIGIT+ ~ ("." ~ ASCII_DIGIT+)? }
+
+// Function definitions for documentation
+// String functions:
+//   upper(s) - convert to uppercase
+//   lower(s) - convert to lowercase
+//   title(s) - convert to title case
+//   sentence(s) - convert to sentence case
+//   camel(s) - convert to camelCase
+//   pascal(s) - convert to PascalCase
+//   snake(s) - convert to snake_case
+//   kebab(s) - convert to kebab-case
+//   trim(s) - trim whitespace
+//   ltrim(s) - trim left whitespace
+//   rtrim(s) - trim right whitespace
+//   replace(s, old, new) - replace text
+//   regex(s, pattern, replacement) - regex replace
+//   substr(s, start, len) - substring
+//   left(s, n) - first n characters
+//   right(s, n) - last n characters
+//   mid(s, start, len) - middle characters
+//   pad(s, len, char) - pad to length
+//   lpad(s, len, char) - left pad
+//   rpad(s, len, char) - right pad
+//   repeat(s, n) - repeat string n times
+//   reverse(s) - reverse string
+//   clean(s) - remove special characters
+//   slug(s) - create URL-safe slug
+//
+// Numeric functions:
+//   num(n, padding) - format number with padding
+//   hex(n) - format as hexadecimal
+//   roman(n) - format as roman numerals
+//   letter(n) - format as letter (A, B, C...)
+//   round(n) - round number
+//   floor(n) - floor number
+//   ceil(n) - ceiling number
+//   abs(n) - absolute value
+//
+// Date functions:
+//   date(format) - format current date
+//   filedate(source, format) - format file date (created/modified/accessed)
+//
+// Conditional:
+//   if(cond, then, else) - conditional expression
+//   coalesce(a, b, ...) - first non-empty value
+//   default(val, default) - use default if empty
+//
+// Meta:
+//   len(s) - length of string
+//   ext(s) - get extension of filename
+//   stem(s) - get stem of filename
+//   dir(s) - get directory of path
+//   filename(s) - get filename of path
