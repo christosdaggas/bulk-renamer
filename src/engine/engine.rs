@@ -4,11 +4,12 @@ use crate::core::{
     BracketType, CaseRule, CleanupRule, DateSource, ExpressionRule, FileEntry, FilterConfig,
     FilterField, FilterMode, FilterOperator, FilterRule, InsertPosition, InsertRule, InsertText,
     MetadataField, MetadataRule, NumberingRule, PadRule, RearrangeRule, RemoveRule, RemoveTarget,
-    RenameConfig, RenamePreview, RenameRecord, RenameStatus, RenameTarget,
+    RenameBatch, RenameConfig, RenamePreview, RenameRecord, RenameStatus, RenameTarget,
     RenamerError, RenamerResult, ReplaceRule, RuleType, SortColumn, SortDirection, TrimRule,
     TrimType, TransliterateRule, TransliterationMapping, DateTimeRule,
 };
 use crate::engine::transformer::*;
+use crate::engine::validator::RenameValidator;
 use crate::expression::ExpressionEngine;
 use chrono::Local;
 use regex::Regex;
@@ -889,37 +890,258 @@ fn format_file_size(size: u64) -> String {
     }
 }
 
-/// Execute the actual rename operations.
-pub fn execute_renames(
+/// A planned rename operation. Every item is first moved to a temporary path,
+/// then moved from the temporary path to its final destination.
+#[derive(Debug, Clone)]
+pub struct RenamePlan {
+    pub items: Vec<RenamePlanItem>,
+    pub skipped: Vec<Uuid>,
+}
+
+#[derive(Debug, Clone)]
+pub struct RenamePlanItem {
+    pub file_id: Uuid,
+    pub original_path: PathBuf,
+    pub temp_path: PathBuf,
+    pub new_path: PathBuf,
+    pub was_directory: bool,
+}
+
+/// Failure for a single rename candidate.
+#[derive(Debug, Clone)]
+pub struct RenameFailure {
+    pub file_id: Uuid,
+    pub original_path: Option<PathBuf>,
+    pub target_path: PathBuf,
+    pub error: String,
+}
+
+/// Structured result for a batch rename.
+#[derive(Debug, Clone)]
+pub struct RenameBatchResult {
+    pub batch: Option<RenameBatch>,
+    pub successes: Vec<RenameRecord>,
+    pub failures: Vec<RenameFailure>,
+    pub skipped: Vec<Uuid>,
+}
+
+impl RenameBatchResult {
+    pub fn success_count(&self) -> usize {
+        self.successes.len()
+    }
+
+    pub fn failure_count(&self) -> usize {
+        self.failures.len()
+    }
+
+    pub fn all_successful(&self) -> bool {
+        self.failure_count() == 0
+    }
+}
+
+/// Validate and plan rename operations for execution.
+pub fn plan_renames(
     previews: &[RenamePreview],
     files: &HashMap<Uuid, FileEntry>,
-) -> Vec<RenamerResult<RenameRecord>> {
-    let mut results = Vec::new();
+) -> RenamerResult<RenamePlan> {
+    let validator = RenameValidator::new();
+    let validation_errors = validator.validate_batch_with_files(previews, files);
+    if !validation_errors.is_empty() {
+        let messages = validation_errors
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("; ");
+        return Err(RenamerError::Internal(messages));
+    }
+
+    let mut items = Vec::new();
+    let mut skipped = Vec::new();
 
     for preview in previews {
         if !matches!(preview.status, RenameStatus::WillRename) {
+            skipped.push(preview.file_id);
             continue;
         }
 
-        if let Some(entry) = files.get(&preview.file_id) {
-            let result = std::fs::rename(&entry.path, &preview.new_path);
+        let entry = files
+            .get(&preview.file_id)
+            .ok_or_else(|| RenamerError::FileNotFound {
+                path: preview.new_path.clone(),
+            })?;
 
-            match result {
-                Ok(_) => {
-                    results.push(Ok(RenameRecord {
-                        id: Uuid::new_v4(),
-                        timestamp: Local::now(),
-                        original_path: entry.path.clone(),
-                        new_path: preview.new_path.clone(),
-                        was_directory: entry.is_directory,
-                    }));
-                }
-                Err(e) => {
-                    results.push(Err(RenamerError::Io(e)));
-                }
+        let temp_path = unique_temp_path(entry);
+        items.push(RenamePlanItem {
+            file_id: preview.file_id,
+            original_path: entry.path.clone(),
+            temp_path,
+            new_path: preview.new_path.clone(),
+            was_directory: entry.is_directory,
+        });
+    }
+
+    Ok(RenamePlan { items, skipped })
+}
+
+/// Execute a prepared rename plan using two phases to avoid source/target swaps
+/// overwriting each other.
+pub fn execute_rename_plan(plan: RenamePlan) -> RenameBatchResult {
+    let mut staged = Vec::new();
+    let mut failures = Vec::new();
+
+    for item in plan.items {
+        match std::fs::rename(&item.original_path, &item.temp_path) {
+            Ok(()) => staged.push(item),
+            Err(err) => failures.push(RenameFailure {
+                file_id: item.file_id,
+                original_path: Some(item.original_path),
+                target_path: item.new_path,
+                error: err.to_string(),
+            }),
+        }
+    }
+
+    let mut successes = Vec::new();
+    for item in staged {
+        match std::fs::rename(&item.temp_path, &item.new_path) {
+            Ok(()) => successes.push(RenameRecord {
+                id: Uuid::new_v4(),
+                timestamp: Local::now(),
+                original_path: item.original_path,
+                new_path: item.new_path,
+                was_directory: item.was_directory,
+            }),
+            Err(err) => {
+                let rollback_error = std::fs::rename(&item.temp_path, &item.original_path)
+                    .err()
+                    .map(|rollback| format!("; rollback failed: {}", rollback))
+                    .unwrap_or_default();
+                failures.push(RenameFailure {
+                    file_id: item.file_id,
+                    original_path: Some(item.original_path),
+                    target_path: item.new_path,
+                    error: format!("{}{}", err, rollback_error),
+                });
             }
         }
     }
 
-    results
+    let batch = if successes.is_empty() {
+        None
+    } else {
+        Some(RenameBatch::new(successes.clone()))
+    };
+
+    RenameBatchResult {
+        batch,
+        successes,
+        failures,
+        skipped: plan.skipped,
+    }
+}
+
+/// Execute the actual rename operations.
+pub fn execute_renames(
+    previews: &[RenamePreview],
+    files: &HashMap<Uuid, FileEntry>,
+) -> RenamerResult<RenameBatchResult> {
+    let plan = plan_renames(previews, files)?;
+    Ok(execute_rename_plan(plan))
+}
+
+fn unique_temp_path(entry: &FileEntry) -> PathBuf {
+    let parent = entry.path.parent().map(PathBuf::from).unwrap_or_default();
+    let stem = entry
+        .path
+        .file_name()
+        .map(|name| name.to_string_lossy())
+        .unwrap_or_default();
+
+    loop {
+        let candidate = parent.join(format!(".bulk-renamer-{}-{}", Uuid::new_v4(), stem));
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+}
+
+#[cfg(test)]
+mod rename_safety_tests {
+    use super::*;
+    use std::fs;
+
+    fn temp_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("bulk-renamer-{}-{}", name, Uuid::new_v4()));
+        fs::create_dir_all(&dir).expect("create temp dir");
+        dir
+    }
+
+    fn preview_for(entry: &FileEntry, new_name: &str) -> RenamePreview {
+        let new_path = entry.path.parent().unwrap().join(new_name);
+        RenamePreview {
+            file_id: entry.id,
+            original_name: entry.original_name.clone(),
+            new_name: new_name.to_string(),
+            new_path,
+            status: RenameStatus::WillRename,
+            message: None,
+        }
+    }
+
+    #[test]
+    fn execute_renames_handles_name_swap() {
+        let dir = temp_dir("swap");
+        let a = dir.join("a.txt");
+        let b = dir.join("b.txt");
+        fs::write(&a, "a").expect("write a");
+        fs::write(&b, "b").expect("write b");
+
+        let entry_a = FileEntry::from_path(a.clone(), 0).expect("entry a");
+        let entry_b = FileEntry::from_path(b.clone(), 0).expect("entry b");
+        let previews = vec![preview_for(&entry_a, "b.txt"), preview_for(&entry_b, "a.txt")];
+        let files = HashMap::from([(entry_a.id, entry_a), (entry_b.id, entry_b)]);
+
+        let result = execute_renames(&previews, &files).expect("execute swap");
+        assert!(result.all_successful());
+        assert_eq!(fs::read_to_string(&a).expect("read a"), "b");
+        assert_eq!(fs::read_to_string(&b).expect("read b"), "a");
+
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn plan_renames_rejects_existing_external_target() {
+        let dir = temp_dir("external-conflict");
+        let source = dir.join("source.txt");
+        let existing = dir.join("existing.txt");
+        fs::write(&source, "source").expect("write source");
+        fs::write(&existing, "existing").expect("write existing");
+
+        let entry = FileEntry::from_path(source, 0).expect("entry");
+        let previews = vec![preview_for(&entry, "existing.txt")];
+        let files = HashMap::from([(entry.id, entry)]);
+
+        assert!(plan_renames(&previews, &files).is_err());
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn plan_renames_rejects_duplicate_targets() {
+        let dir = temp_dir("duplicate-target");
+        let a = dir.join("a.txt");
+        let b = dir.join("b.txt");
+        fs::write(&a, "a").expect("write a");
+        fs::write(&b, "b").expect("write b");
+
+        let entry_a = FileEntry::from_path(a, 0).expect("entry a");
+        let entry_b = FileEntry::from_path(b, 0).expect("entry b");
+        let previews = vec![
+            preview_for(&entry_a, "same.txt"),
+            preview_for(&entry_b, "same.txt"),
+        ];
+        let files = HashMap::from([(entry_a.id, entry_a), (entry_b.id, entry_b)]);
+
+        assert!(plan_renames(&previews, &files).is_err());
+        fs::remove_dir_all(dir).ok();
+    }
 }

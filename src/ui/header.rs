@@ -115,7 +115,7 @@ pub fn create_rule_toolbar() -> gtk::Box {
 
     // Quick action buttons
     let lowercase_btn = gtk::Button::builder()
-        .icon_name("format-text-lowercase-symbolic")
+        .icon_name("format-text-plaintext-symbolic")
         .tooltip_text("Lowercase")
         .css_classes(vec!["flat"])
         .build();
@@ -123,7 +123,7 @@ pub fn create_rule_toolbar() -> gtk::Box {
     toolbar.append(&lowercase_btn);
 
     let uppercase_btn = gtk::Button::builder()
-        .icon_name("format-text-uppercase-symbolic")
+        .icon_name("format-text-rich-symbolic")
         .tooltip_text("Uppercase")
         .css_classes(vec!["flat"])
         .build();
@@ -141,7 +141,7 @@ pub fn create_rule_toolbar() -> gtk::Box {
     toolbar.append(&gtk::Separator::new(gtk::Orientation::Vertical));
 
     let number_btn = gtk::Button::builder()
-        .icon_name("format-ordered-list-symbolic")
+        .icon_name("view-list-ordered-symbolic")
         .tooltip_text("Add Numbers")
         .css_classes(vec!["flat"])
         .build();

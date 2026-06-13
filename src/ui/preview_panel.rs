@@ -15,12 +15,12 @@ pub fn create_preview_row(preview: &RenamePreview) -> adw::ActionRow {
     // Status indicator
     let status_icon = match preview.status {
         RenameStatus::WillRename => {
-            let icon = gtk::Image::from_icon_name("emblem-ok-symbolic");
+            let icon = gtk::Image::from_icon_name("object-select-symbolic");
             icon.add_css_class("success");
             icon
         }
         RenameStatus::Unchanged => {
-            let icon = gtk::Image::from_icon_name("content-loading-symbolic");
+            let icon = gtk::Image::from_icon_name("action-unavailable-symbolic");
             icon.add_css_class("dim-label");
             icon
         }
@@ -35,7 +35,7 @@ pub fn create_preview_row(preview: &RenamePreview) -> adw::ActionRow {
             icon
         }
         RenameStatus::Completed => {
-            let icon = gtk::Image::from_icon_name("emblem-default-symbolic");
+            let icon = gtk::Image::from_icon_name("object-select-symbolic");
             icon.add_css_class("success");
             icon
         }

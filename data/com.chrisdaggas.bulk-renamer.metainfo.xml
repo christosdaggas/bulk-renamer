@@ -20,13 +20,20 @@
       <li>Add sequential numbering</li>
       <li>Insert date/time from file metadata</li>
       <li>Preview changes before applying</li>
-      <li>Undo support</li>
+      <li>Safe validation, undo support, and rename logs</li>
       <li>Save and load presets</li>
+      <li>Import direct rename mappings from CSV</li>
     </ul>
+    <p>
+      Some advanced rule editors are still being completed; the core engine
+      supports more rule types than the current interface exposes.
+    </p>
   </description>
   <launchable type="desktop-id">com.chrisdaggas.bulk-renamer.desktop</launchable>
   <url type="homepage">https://chrisdaggas.com</url>
-  <developer_name>Christos A. Daggas</developer_name>
+  <developer id="com.chrisdaggas">
+    <name>Christos A. Daggas</name>
+  </developer>
   <content_rating type="oars-1.1" />
   <releases>
     <release version="1.0.0" date="2026-01-06">
@@ -35,12 +42,6 @@
       </description>
     </release>
   </releases>
-  <screenshots>
-    <screenshot type="default">
-      <caption>Main window showing file list and rename rules</caption>
-      <image>https://chrisdaggas.com/gnome-renamer/screenshot.png</image>
-    </screenshot>
-  </screenshots>
   <categories>
     <category>Utility</category>
     <category>FileTools</category>

@@ -7,6 +7,12 @@ A powerful, GNOME-native bulk file renaming application written entirely in Rust
 
 ## Features
 
+### Current Status
+
+Implemented and wired today: core rule-based renaming, safe batch validation, two-phase rename execution for swaps, undo/redo history, rename logging/export, presets, CSV-driven direct renames, settings persistence, folder scanning options, metadata loading for previews, and live preview status counts.
+
+Partially implemented: some advanced rule types exist in the engine but still need full UI editors. EXIF date writing is not implemented.
+
 ### Basic Renaming
 - **Find & Replace**: Simple text replacement with optional case sensitivity
 - **Regular Expressions**: Advanced pattern matching with capture groups

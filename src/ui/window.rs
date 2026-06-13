@@ -1,8 +1,10 @@
 //! Main application window with three-panel layout.
 
-use crate::core::{AppSettings, FileEntry, RenameConfig, RenamePreview, RenameStatus};
+use crate::core::{AppSettings, FileEntry, RenameBatch, RenameConfig, RenamePreview, RenameStatus, RenameTarget};
 use crate::core::types::ThemePreference;
-use crate::engine::RenameEngine;
+use crate::engine::{RenameEngine, RenameValidator};
+use crate::presets::{Preset, PresetManager};
+use crate::undo::{RenameLogEntry, RenameLogger, UndoManager};
 use async_channel;
 use libadwaita as adw;
 use adw::prelude::*;
@@ -23,6 +25,7 @@ mod imp {
         pub files: RefCell<Vec<FileEntry>>,
         pub previews: RefCell<Vec<RenamePreview>>,
         pub config: RefCell<RenameConfig>,
+        pub target: RefCell<RenameTarget>,
         pub settings: RefCell<AppSettings>,
         pub file_list: RefCell<Option<gtk::ListBox>>,
         pub preview_list: RefCell<Option<gtk::ListBox>>,
@@ -30,6 +33,9 @@ mod imp {
         pub files_count_label: RefCell<Option<gtk::Label>>,
         pub selected_count_label: RefCell<Option<gtk::Label>>,
         pub preview_count_label: RefCell<Option<gtk::Label>>,
+        pub rename_button: RefCell<Option<gtk::Button>>,
+        pub undo_manager: RefCell<UndoManager>,
+        pub logger: RefCell<RenameLogger>,
     }
 
     #[glib::object_subclass]
@@ -93,6 +99,7 @@ impl RenamerWindow {
         // Right side: Rename button and menu
         let rename_btn = gtk::Button::builder()
             .label("Rename")
+            .sensitive(false)
             .build();
         rename_btn.add_css_class("suggested-action");
 
@@ -117,6 +124,7 @@ impl RenamerWindow {
 
         header.pack_end(&menu_btn);
         header.pack_end(&rename_btn);
+        self.imp().rename_button.replace(Some(rename_btn));
 
         header
     }
@@ -364,6 +372,60 @@ impl RenamerWindow {
         export_row.add_css_class("menu-item");
         tools_list.append(&export_row);
 
+        // Undo row
+        let undo_row = gtk::Button::new();
+        let undo_content = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+        undo_content.set_margin_start(6);
+        undo_content.set_margin_end(6);
+        undo_content.set_margin_top(8);
+        undo_content.set_margin_bottom(8);
+        let undo_icon = gtk::Image::from_icon_name("edit-undo-symbolic");
+        let undo_label = gtk::Label::new(Some("Undo Last Rename"));
+        undo_label.set_halign(gtk::Align::Start);
+        undo_label.set_hexpand(true);
+        undo_content.append(&undo_icon);
+        undo_content.append(&undo_label);
+        undo_row.set_child(Some(&undo_content));
+        undo_row.add_css_class("flat");
+        undo_row.add_css_class("menu-item");
+        tools_list.append(&undo_row);
+
+        // Redo row
+        let redo_row = gtk::Button::new();
+        let redo_content = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+        redo_content.set_margin_start(6);
+        redo_content.set_margin_end(6);
+        redo_content.set_margin_top(8);
+        redo_content.set_margin_bottom(8);
+        let redo_icon = gtk::Image::from_icon_name("edit-redo-symbolic");
+        let redo_label = gtk::Label::new(Some("Redo Rename"));
+        redo_label.set_halign(gtk::Align::Start);
+        redo_label.set_hexpand(true);
+        redo_content.append(&redo_icon);
+        redo_content.append(&redo_label);
+        redo_row.set_child(Some(&redo_content));
+        redo_row.add_css_class("flat");
+        redo_row.add_css_class("menu-item");
+        tools_list.append(&redo_row);
+
+        // Preferences row
+        let preferences_row = gtk::Button::new();
+        let preferences_content = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+        preferences_content.set_margin_start(6);
+        preferences_content.set_margin_end(6);
+        preferences_content.set_margin_top(8);
+        preferences_content.set_margin_bottom(8);
+        let preferences_icon = gtk::Image::from_icon_name("preferences-system-symbolic");
+        let preferences_label = gtk::Label::new(Some("Preferences"));
+        preferences_label.set_halign(gtk::Align::Start);
+        preferences_label.set_hexpand(true);
+        preferences_content.append(&preferences_icon);
+        preferences_content.append(&preferences_label);
+        preferences_row.set_child(Some(&preferences_content));
+        preferences_row.add_css_class("flat");
+        preferences_row.add_css_class("menu-item");
+        tools_list.append(&preferences_row);
+
         main_box.append(&tools_list);
 
         // Separator
@@ -436,6 +498,42 @@ impl RenamerWindow {
                     pop.popdown();
                 }
                 window.show_export_log_dialog();
+            }
+        ));
+
+        let popover_weak = popover.downgrade();
+        undo_row.connect_clicked(clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |_| {
+                if let Some(pop) = popover_weak.upgrade() {
+                    pop.popdown();
+                }
+                window.undo_last_batch();
+            }
+        ));
+
+        let popover_weak = popover.downgrade();
+        redo_row.connect_clicked(clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |_| {
+                if let Some(pop) = popover_weak.upgrade() {
+                    pop.popdown();
+                }
+                window.redo_last_batch();
+            }
+        ));
+
+        let popover_weak = popover.downgrade();
+        preferences_row.connect_clicked(clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |_| {
+                if let Some(pop) = popover_weak.upgrade() {
+                    pop.popdown();
+                }
+                window.show_preferences_dialog();
             }
         ));
 
@@ -841,6 +939,29 @@ impl RenamerWindow {
             }
         ));
 
+        target_row.connect_selected_notify(clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |row| {
+                let target = match row.selected() {
+                    1 => RenameTarget::FoldersOnly,
+                    2 => RenameTarget::Both,
+                    _ => RenameTarget::FilesOnly,
+                };
+                *window.imp().target.borrow_mut() = target;
+                window.update_preview();
+            }
+        ));
+
+        ext_switch.connect_active_notify(clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |row| {
+                window.imp().config.borrow_mut().separate_extension = row.is_active();
+                window.update_preview();
+            }
+        ));
+
         panel.into()
     }
 
@@ -969,6 +1090,80 @@ impl RenamerWindow {
     }
 
     fn setup_actions(&self) {
+        // Execute rename action
+        let execute_action = gio::SimpleAction::new("execute-rename", None);
+        execute_action.connect_activate(clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |_, _| {
+                window.execute_rename();
+            }
+        ));
+        self.add_action(&execute_action);
+
+        // Add files/folders actions
+        let add_files_action = gio::SimpleAction::new("add-files", None);
+        add_files_action.connect_activate(clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |_, _| {
+                window.show_add_files_dialog();
+            }
+        ));
+        self.add_action(&add_files_action);
+
+        let add_folder_action = gio::SimpleAction::new("add-folder", None);
+        add_folder_action.connect_activate(clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |_, _| {
+                window.show_add_folder_dialog();
+            }
+        ));
+        self.add_action(&add_folder_action);
+
+        let clear_files_action = gio::SimpleAction::new("clear-files", None);
+        clear_files_action.connect_activate(clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |_, _| {
+                window.clear_files();
+            }
+        ));
+        self.add_action(&clear_files_action);
+
+        // Undo/redo actions
+        let undo_action = gio::SimpleAction::new("undo", None);
+        undo_action.connect_activate(clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |_, _| {
+                window.undo_last_batch();
+            }
+        ));
+        self.add_action(&undo_action);
+
+        let redo_action = gio::SimpleAction::new("redo", None);
+        redo_action.connect_activate(clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |_, _| {
+                window.redo_last_batch();
+            }
+        ));
+        self.add_action(&redo_action);
+
+        // Preferences action
+        let preferences_action = gio::SimpleAction::new("preferences", None);
+        preferences_action.connect_activate(clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |_, _| {
+                window.show_preferences_dialog();
+            }
+        ));
+        self.add_action(&preferences_action);
+
         // Save preset action
         let save_preset_action = gio::SimpleAction::new("save-preset", None);
         save_preset_action.connect_activate(clone!(
@@ -1012,6 +1207,46 @@ impl RenamerWindow {
             }
         ));
         self.add_action(&export_log_action);
+
+        let about_action = gio::SimpleAction::new("about", None);
+        about_action.connect_activate(clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |_, _| {
+                window.show_about_dialog();
+            }
+        ));
+        self.add_action(&about_action);
+
+        self.add_quick_rule_action("quick-lowercase", crate::core::CaseType::Lower);
+        self.add_quick_rule_action("quick-uppercase", crate::core::CaseType::Upper);
+        self.add_quick_rule_action("quick-titlecase", crate::core::CaseType::Title);
+
+        let quick_number_action = gio::SimpleAction::new("quick-number", None);
+        quick_number_action.connect_activate(clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |_, _| {
+                if let Some(rules_list) = window.imp().rules_list.borrow().as_ref() {
+                    window.add_numbering_rule_at(rules_list, 1, 1, 2, 1, "_".to_string(), None);
+                }
+            }
+        ));
+        self.add_action(&quick_number_action);
+    }
+
+    fn add_quick_rule_action(&self, name: &str, case_type: crate::core::CaseType) {
+        let action = gio::SimpleAction::new(name, None);
+        action.connect_activate(clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |_, _| {
+                if let Some(rules_list) = window.imp().rules_list.borrow().as_ref() {
+                    window.add_case_rule_at(rules_list, case_type as usize, None);
+                }
+            }
+        ));
+        self.add_action(&action);
     }
 
     fn load_settings(&self) {
@@ -1024,6 +1259,12 @@ impl RenamerWindow {
             ThemePreference::System => style_manager.set_color_scheme(adw::ColorScheme::Default),
             ThemePreference::Light => style_manager.set_color_scheme(adw::ColorScheme::ForceLight),
             ThemePreference::Dark => style_manager.set_color_scheme(adw::ColorScheme::ForceDark),
+        }
+        self.imp().logger.borrow_mut().set_enabled(settings.log_operations);
+        if settings.undo_persistence_enabled {
+            if let Err(err) = self.imp().undo_manager.borrow_mut().load_from_disk() {
+                tracing::error!("Failed to load undo history: {}", err);
+            }
         }
         
         self.imp().settings.replace(settings);
@@ -1103,16 +1344,28 @@ impl RenamerWindow {
         if path.is_dir() {
             // Use gio::spawn_blocking for directory traversal to avoid blocking the UI
             let (sender, receiver) = async_channel::bounded::<Vec<FileEntry>>(1);
+            let settings = self.imp().settings.borrow().clone();
             
             gio::spawn_blocking(move || {
                 let mut entries = Vec::new();
                 for entry in walkdir::WalkDir::new(&path)
                     .min_depth(1)
-                    .max_depth(10)
+                    .max_depth(settings.recursive_folder_depth)
+                    .follow_links(settings.follow_symlinks)
                     .into_iter()
                     .filter_map(|e| e.ok())
                 {
-                    if let Ok(file_entry) = FileEntry::from_path(entry.path().to_path_buf(), entry.depth()) {
+                    let is_hidden = entry
+                        .file_name()
+                        .to_string_lossy()
+                        .starts_with('.');
+                    if is_hidden && !settings.show_hidden_files {
+                        continue;
+                    }
+                    if let Ok(mut file_entry) = FileEntry::from_path(entry.path().to_path_buf(), entry.depth()) {
+                        if settings.metadata_loading_enabled && file_entry.metadata_cache.is_none() {
+                            let _ = crate::metadata::load_metadata(&mut file_entry);
+                        }
                         entries.push(file_entry);
                     }
                 }
@@ -1129,7 +1382,10 @@ impl RenamerWindow {
                     }
                 }
             ));
-        } else if let Ok(file_entry) = FileEntry::from_path(path, 0) {
+        } else if let Ok(mut file_entry) = FileEntry::from_path(path, 0) {
+            if self.imp().settings.borrow().metadata_loading_enabled {
+                let _ = crate::metadata::load_metadata(&mut file_entry);
+            }
             let mut files = self.imp().files.borrow_mut();
             files.push(file_entry);
             drop(files);
@@ -1244,15 +1500,46 @@ impl RenamerWindow {
         let config = self.imp().config.borrow().clone();
 
         let mut engine = RenameEngine::new(config);
-        let previews = engine.generate_previews(&files);
+        engine.set_target(*self.imp().target.borrow());
+        let mut previews = engine.generate_previews(&files);
+        let files_by_id: HashMap<Uuid, FileEntry> = files
+            .iter()
+            .map(|entry| (entry.id, entry.clone()))
+            .collect();
+        let validator = RenameValidator::new();
+        for error in validator.validate_batch_with_files(&previews, &files_by_id) {
+            if let Some(preview) = previews.get_mut(error.file_index) {
+                preview.status = match error.error_type {
+                    crate::core::ValidationErrorType::Conflict => RenameStatus::InternalConflict,
+                    _ => RenameStatus::Error,
+                };
+                preview.message = Some(error.message);
+            }
+        }
 
         // Count stats
         let will_rename = previews.iter()
             .filter(|p| matches!(p.status, RenameStatus::WillRename))
             .count();
+        let unchanged = previews.iter()
+            .filter(|p| matches!(p.status, RenameStatus::Unchanged))
+            .count();
+        let conflicts = previews.iter()
+            .filter(|p| matches!(p.status, RenameStatus::Conflict | RenameStatus::InternalConflict))
+            .count();
+        let errors = previews.iter()
+            .filter(|p| matches!(p.status, RenameStatus::Error | RenameStatus::Failed))
+            .count();
 
         if let Some(label) = self.imp().preview_count_label.borrow().as_ref() {
-            label.set_label(&format!("{} will be renamed", will_rename));
+            label.set_label(&format!(
+                "{} rename, {} unchanged, {} conflicts, {} errors",
+                will_rename, unchanged, conflicts, errors
+            ));
+        }
+
+        if let Some(button) = self.imp().rename_button.borrow().as_ref() {
+            button.set_sensitive(will_rename > 0 && conflicts == 0 && errors == 0);
         }
 
         // Update preview list
@@ -1261,7 +1548,11 @@ impl RenamerWindow {
                 list.remove(&child);
             }
 
+            let settings = self.imp().settings.borrow();
             for preview in &previews {
+                if !settings.show_unchanged_files && matches!(preview.status, RenameStatus::Unchanged) {
+                    continue;
+                }
                 let row = self.create_preview_row(preview);
                 list.append(&row);
             }
@@ -1276,22 +1567,33 @@ impl RenamerWindow {
             .title(&preview.original_name)
             .build();
 
+        let file_icon = gtk::Image::from_icon_name(get_icon_for_filename(&preview.original_name));
+        file_icon.add_css_class("dim-label");
+        row.add_prefix(&file_icon);
+
         // Status icon based on preview status
         let (icon_name, css_class) = match preview.status {
             RenameStatus::WillRename => ("object-select-symbolic", "success"),
-            RenameStatus::Unchanged => ("minus-symbolic", "dim-label"),
+            RenameStatus::Unchanged => ("action-unavailable-symbolic", "dim-label"),
             RenameStatus::Error | RenameStatus::Failed => ("dialog-error-symbolic", "error"),
             RenameStatus::Conflict | RenameStatus::InternalConflict => ("dialog-warning-symbolic", "warning"),
-            _ => ("minus-symbolic", "dim-label"),
+            RenameStatus::Completed => ("object-select-symbolic", "success"),
+            RenameStatus::Skipped => ("action-unavailable-symbolic", "dim-label"),
         };
 
         let status_icon = gtk::Image::from_icon_name(icon_name);
         status_icon.add_css_class(css_class);
-        row.add_prefix(&status_icon);
+        row.add_suffix(&status_icon);
 
         // Show new name if different from original
         if preview.new_name != preview.original_name {
             row.set_subtitle(&preview.new_name);
+        }
+        if let Some(message) = &preview.message {
+            row.set_tooltip_text(Some(message));
+            if preview.new_name == preview.original_name {
+                row.set_subtitle(message);
+            }
         }
 
         row
@@ -1300,6 +1602,11 @@ impl RenamerWindow {
     // ============ Rename Operations ============
 
     pub fn execute_rename(&self) {
+        if !self.imp().settings.borrow().confirm_before_rename {
+            self.perform_rename();
+            return;
+        }
+
         let to_rename_count = {
             let previews = self.imp().previews.borrow();
             previews
@@ -1346,16 +1653,23 @@ impl RenamerWindow {
             .collect();
 
         let previews = self.imp().previews.borrow().clone();
-        let results = crate::engine::execute_renames(&previews, &files);
+        match crate::engine::execute_renames(&previews, &files) {
+            Ok(result) => self.handle_rename_result(result),
+            Err(err) => self.show_info_dialog("Rename Blocked", &err.to_string()),
+        }
+    }
 
-        let mut success_count = 0;
-        let mut error_count = 0;
+    fn handle_rename_result(&self, result: crate::engine::RenameBatchResult) {
+        let success_count = result.success_count();
+        let error_count = result.failure_count();
 
-        for result in results {
-            match result {
-                Ok(_) => success_count += 1,
-                Err(_) => error_count += 1,
+        if let Some(batch) = result.batch.clone() {
+            if self.imp().settings.borrow().undo_persistence_enabled {
+                if let Err(err) = self.imp().undo_manager.borrow_mut().record_batch(batch.clone()) {
+                    tracing::error!("Failed to record undo batch: {}", err);
+                }
             }
+            self.log_rename_batch(&batch);
         }
 
         if error_count == 0 {
@@ -1364,22 +1678,227 @@ impl RenamerWindow {
                 &format!("Successfully renamed {} files.", success_count),
             );
         } else {
+            let details = result
+                .failures
+                .iter()
+                .take(8)
+                .map(|failure| {
+                    format!(
+                        "{}: {}",
+                        failure.target_path.display(),
+                        failure.error
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
             self.show_info_dialog(
                 "Rename Completed with Errors",
                 &format!(
-                    "Renamed {} files successfully, {} failed.",
-                    success_count, error_count
+                    "Renamed {} files successfully, {} failed.\n{}",
+                    success_count, error_count, details
                 ),
             );
         }
 
-        self.clear_files();
+        if success_count > 0 {
+            self.clear_files();
+        } else {
+            self.update_preview();
+        }
+    }
+
+    fn log_rename_batch(&self, batch: &RenameBatch) {
+        let settings = self.imp().settings.borrow();
+        if !settings.log_operations {
+            return;
+        }
+        drop(settings);
+
+        let statuses = batch
+            .records
+            .iter()
+            .map(|record| (record.id, RenameStatus::Completed, None))
+            .collect::<Vec<_>>();
+
+        let logger = self.imp().logger.borrow();
+        if let Err(err) = logger.log_batch(batch, &statuses) {
+            tracing::error!("Failed to write rename log: {}", err);
+        }
+
+        for record in &batch.records {
+            let entry = RenameLogEntry {
+                id: Uuid::new_v4(),
+                timestamp: record.timestamp,
+                batch_id: batch.id,
+                original_path: record.original_path.clone(),
+                new_path: record.new_path.clone(),
+                is_directory: record.was_directory,
+                status: RenameStatus::Completed,
+                error: None,
+            };
+            if let Err(err) = logger.log_jsonl(&entry) {
+                tracing::error!("Failed to write rename JSONL log: {}", err);
+            }
+        }
     }
 
     fn show_info_dialog(&self, title: &str, message: &str) {
         let dialog = adw::MessageDialog::new(Some(self), Some(title), Some(message));
         dialog.add_response("ok", "OK");
         dialog.set_default_response(Some("ok"));
+        dialog.present();
+    }
+
+    fn undo_last_batch(&self) {
+        match self.imp().undo_manager.borrow_mut().undo() {
+            Ok(result) => {
+                self.show_info_dialog(
+                    "Undo Complete",
+                    &format!(
+                        "Restored {} of {} renamed files.",
+                        result.success_count, result.total_records
+                    ),
+                );
+                self.update_preview();
+            }
+            Err(err) => self.show_info_dialog("Undo Unavailable", &err.to_string()),
+        }
+    }
+
+    fn redo_last_batch(&self) {
+        match self.imp().undo_manager.borrow_mut().redo() {
+            Ok(result) => {
+                self.show_info_dialog(
+                    "Redo Complete",
+                    &format!(
+                        "Renamed {} of {} files again.",
+                        result.success_count, result.total_records
+                    ),
+                );
+                self.update_preview();
+            }
+            Err(err) => self.show_info_dialog("Redo Unavailable", &err.to_string()),
+        }
+    }
+
+    fn show_preferences_dialog(&self) {
+        let settings = self.imp().settings.borrow().clone();
+        let dialog = adw::Window::builder()
+            .title("Preferences")
+            .default_width(520)
+            .default_height(520)
+            .modal(true)
+            .transient_for(self)
+            .build();
+
+        let toolbar_view = adw::ToolbarView::new();
+        let header = adw::HeaderBar::new();
+        let cancel_btn = gtk::Button::with_label("Cancel");
+        cancel_btn.add_css_class("flat");
+        let save_btn = gtk::Button::with_label("Save");
+        save_btn.add_css_class("suggested-action");
+        header.pack_start(&cancel_btn);
+        header.pack_end(&save_btn);
+        toolbar_view.add_top_bar(&header);
+
+        let page = adw::PreferencesPage::new();
+
+        let behavior = adw::PreferencesGroup::builder()
+            .title("Behavior")
+            .build();
+        let confirm_row = adw::SwitchRow::builder()
+            .title("Confirm Before Rename")
+            .active(settings.confirm_before_rename)
+            .build();
+        let live_preview_row = adw::SwitchRow::builder()
+            .title("Live Preview")
+            .active(settings.live_preview)
+            .build();
+        let show_unchanged_row = adw::SwitchRow::builder()
+            .title("Show Unchanged Files")
+            .active(settings.show_unchanged_files)
+            .build();
+        behavior.add(&confirm_row);
+        behavior.add(&live_preview_row);
+        behavior.add(&show_unchanged_row);
+        page.add(&behavior);
+
+        let files = adw::PreferencesGroup::builder()
+            .title("Files")
+            .build();
+        let hidden_row = adw::SwitchRow::builder()
+            .title("Include Hidden Files")
+            .active(settings.show_hidden_files)
+            .build();
+        let symlink_row = adw::SwitchRow::builder()
+            .title("Follow Symlinks")
+            .active(settings.follow_symlinks)
+            .build();
+        let metadata_row = adw::SwitchRow::builder()
+            .title("Load Metadata")
+            .active(settings.metadata_loading_enabled)
+            .build();
+        let depth_row = adw::SpinRow::builder()
+            .title("Folder Scan Depth")
+            .adjustment(&gtk::Adjustment::new(
+                settings.recursive_folder_depth as f64,
+                1.0,
+                100.0,
+                1.0,
+                5.0,
+                0.0,
+            ))
+            .build();
+        files.add(&hidden_row);
+        files.add(&symlink_row);
+        files.add(&metadata_row);
+        files.add(&depth_row);
+        page.add(&files);
+
+        let history = adw::PreferencesGroup::builder()
+            .title("History and Logs")
+            .build();
+        let undo_row = adw::SwitchRow::builder()
+            .title("Persist Undo History")
+            .active(settings.undo_persistence_enabled)
+            .build();
+        let log_row = adw::SwitchRow::builder()
+            .title("Log Rename Operations")
+            .active(settings.log_operations)
+            .build();
+        history.add(&undo_row);
+        history.add(&log_row);
+        page.add(&history);
+
+        toolbar_view.set_content(Some(&page));
+        dialog.set_content(Some(&toolbar_view));
+
+        let dialog_clone = dialog.clone();
+        cancel_btn.connect_clicked(move |_| {
+            dialog_clone.close();
+        });
+
+        let dialog_clone = dialog.clone();
+        let window = self.clone();
+        save_btn.connect_clicked(move |_| {
+            {
+                let mut settings = window.imp().settings.borrow_mut();
+                settings.confirm_before_rename = confirm_row.is_active();
+                settings.live_preview = live_preview_row.is_active();
+                settings.show_unchanged_files = show_unchanged_row.is_active();
+                settings.show_hidden_files = hidden_row.is_active();
+                settings.follow_symlinks = symlink_row.is_active();
+                settings.metadata_loading_enabled = metadata_row.is_active();
+                settings.recursive_folder_depth = depth_row.value() as usize;
+                settings.undo_persistence_enabled = undo_row.is_active();
+                settings.log_operations = log_row.is_active();
+            }
+            window.imp().logger.borrow_mut().set_enabled(log_row.is_active());
+            window.save_settings();
+            window.update_preview();
+            dialog_clone.close();
+        });
+
         dialog.present();
     }
 
@@ -1399,7 +1918,7 @@ impl RenamerWindow {
 
         let rule_types = [
             ("edit-find-replace-symbolic", "Replace Text", "Find and replace text"),
-            ("format-text-larger-symbolic", "Change Case", "UPPER, lower, Title Case"),
+            ("format-text-rich-symbolic", "Change Case", "UPPER, lower, Title Case"),
             ("insert-text-symbolic", "Insert Text", "Add text at position"),
             ("edit-delete-symbolic", "Remove Text", "Remove characters or patterns"),
             ("view-list-ordered-symbolic", "Numbering", "Add sequential numbers"),
@@ -1841,7 +2360,7 @@ impl RenamerWindow {
                     crate::core::CaseType::Kebab => "kebab-case",
                     _ => "Unknown",
                 };
-                ("Change Case".to_string(), case_name.to_string(), "format-text-larger-symbolic".to_string())
+                ("Change Case".to_string(), case_name.to_string(), "format-text-rich-symbolic".to_string())
             }
             RuleType::Insert(i) => {
                 let text = match &i.text {
@@ -2142,7 +2661,7 @@ impl RenamerWindow {
             // Add new rule
             self.imp().config.borrow_mut().rules.push(rule);
             let rule_index = self.imp().config.borrow().rules.len() - 1;
-            let row = self.create_rule_row("Change Case", subtitle, "format-text-larger-symbolic", rule_index, rules_list);
+            let row = self.create_rule_row("Change Case", subtitle, "format-text-rich-symbolic", rule_index, rules_list);
             rules_list.append(&row);
         }
         self.update_preview();
@@ -3182,11 +3701,108 @@ impl RenamerWindow {
         dialog.add_response("cancel", "Cancel");
         dialog.add_response("save", "Save");
         dialog.set_response_appearance("save", adw::ResponseAppearance::Suggested);
+        dialog.set_default_response(Some("save"));
+
+        dialog.connect_response(None, clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |dialog, response| {
+                if response == "save" {
+                    let name = entry.text().trim().to_string();
+                    if name.is_empty() {
+                        window.show_info_dialog("Preset Not Saved", "Preset name cannot be empty.");
+                        return;
+                    }
+                    let config = window.imp().config.borrow().clone();
+                    let preset = Preset::new(&name, config);
+                    let mut manager = PresetManager::default();
+                    match manager.add_preset(preset) {
+                        Ok(()) => window.show_info_dialog("Preset Saved", "The current rules were saved."),
+                        Err(err) => window.show_info_dialog("Preset Not Saved", &err.to_string()),
+                    }
+                }
+                dialog.close();
+            }
+        ));
         dialog.present();
     }
 
     fn show_load_preset_dialog(&self) {
-        // TODO: Implement preset loading
+        let manager = PresetManager::default();
+        let presets = manager
+            .get_all()
+            .into_iter()
+            .cloned()
+            .collect::<Vec<_>>();
+
+        if presets.is_empty() {
+            self.show_info_dialog("No Presets", "There are no presets to load yet.");
+            return;
+        }
+
+        let dialog = adw::MessageDialog::new(
+            Some(self),
+            Some("Load Preset"),
+            Some("Choose a preset to apply."),
+        );
+
+        let scroll = gtk::ScrolledWindow::builder()
+            .max_content_height(360)
+            .propagate_natural_height(true)
+            .margin_start(12)
+            .margin_end(12)
+            .build();
+        let list = gtk::ListBox::builder()
+            .selection_mode(gtk::SelectionMode::Single)
+            .css_classes(vec!["boxed-list"])
+            .build();
+
+        for preset in &presets {
+            let subtitle = preset
+                .description
+                .clone()
+                .unwrap_or_else(|| format!("{} rules", preset.config.rules.len()));
+            let row = adw::ActionRow::builder()
+                .title(&preset.name)
+                .subtitle(&subtitle)
+                .activatable(true)
+                .build();
+            list.append(&row);
+        }
+        list.select_row(list.row_at_index(0).as_ref());
+
+        scroll.set_child(Some(&list));
+        dialog.set_extra_child(Some(&scroll));
+        dialog.add_response("cancel", "Cancel");
+        dialog.add_response("load", "Load");
+        dialog.set_response_appearance("load", adw::ResponseAppearance::Suggested);
+
+        dialog.connect_response(None, clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |dialog, response| {
+                if response == "load" {
+                    if let Some(row) = list.selected_row() {
+                        let idx = row.index() as usize;
+                        if let Some(preset) = presets.get(idx) {
+                            window.apply_preset(preset.clone());
+                        }
+                    }
+                }
+                dialog.close();
+            }
+        ));
+
+        dialog.present();
+    }
+
+    fn apply_preset(&self, preset: Preset) {
+        self.imp().config.replace(preset.config);
+        if let Some(rules_list) = self.imp().rules_list.borrow().as_ref() {
+            self.rebuild_rules_list(rules_list);
+        }
+        self.update_preview();
+        self.show_info_dialog("Preset Loaded", &format!("Loaded '{}'.", preset.name));
     }
 
     fn show_import_csv_dialog(&self) {
@@ -3196,10 +3812,14 @@ impl RenamerWindow {
             .build();
 
         dialog.open(Some(self), gio::Cancellable::NONE, clone!(
-            #[weak(rename_to = _window)]
+            #[weak(rename_to = window)]
             self,
-            move |_result| {
-                // TODO: Implement CSV import
+            move |result| {
+                if let Ok(file) = result {
+                    if let Some(path) = file.path() {
+                        window.import_csv_file(path);
+                    }
+                }
             }
         ));
     }
@@ -3211,19 +3831,107 @@ impl RenamerWindow {
             .build();
 
         dialog.save(Some(self), gio::Cancellable::NONE, clone!(
-            #[weak(rename_to = _window)]
+            #[weak(rename_to = window)]
             self,
-            move |_result| {
-                // TODO: Implement log export
+            move |result| {
+                if let Ok(file) = result {
+                    if let Some(path) = file.path() {
+                        match window.imp().logger.borrow().export_csv(&path) {
+                            Ok(()) => window.show_info_dialog("Log Exported", "Rename log exported to CSV."),
+                            Err(err) => window.show_info_dialog("Export Failed", &err.to_string()),
+                        }
+                    }
+                }
             }
         ));
+    }
+
+    fn import_csv_file(&self, path: PathBuf) {
+        match self.read_csv_rename_plan(path) {
+            Ok((previews, files)) => {
+                let count = previews.len();
+                let dialog = adw::MessageDialog::new(
+                    Some(self),
+                    Some("Import CSV Renames"),
+                    Some(&format!("Apply {} renames from the CSV file?", count)),
+                );
+                dialog.add_response("cancel", "Cancel");
+                dialog.add_response("rename", "Rename");
+                dialog.set_response_appearance("rename", adw::ResponseAppearance::Suggested);
+                dialog.connect_response(None, clone!(
+                    #[weak(rename_to = window)]
+                    self,
+                    move |dialog, response| {
+                        if response == "rename" {
+                            match crate::engine::execute_renames(&previews, &files) {
+                                Ok(result) => window.handle_rename_result(result),
+                                Err(err) => window.show_info_dialog("CSV Import Blocked", &err.to_string()),
+                            }
+                        }
+                        dialog.close();
+                    }
+                ));
+                dialog.present();
+            }
+            Err(err) => self.show_info_dialog("CSV Import Failed", &err.to_string()),
+        }
+    }
+
+    fn read_csv_rename_plan(
+        &self,
+        path: PathBuf,
+    ) -> crate::core::RenamerResult<(Vec<RenamePreview>, HashMap<Uuid, FileEntry>)> {
+        let mut reader = csv::Reader::from_path(path)?;
+        let headers = reader.headers()?.clone();
+        let path_idx = headers
+            .iter()
+            .position(|header| header == "original_path")
+            .ok_or_else(|| crate::core::RenamerError::Internal(
+                "CSV must include an original_path column".to_string(),
+            ))?;
+        let name_idx = headers
+            .iter()
+            .position(|header| header == "new_name")
+            .ok_or_else(|| crate::core::RenamerError::Internal(
+                "CSV must include a new_name column".to_string(),
+            ))?;
+
+        let mut previews = Vec::new();
+        let mut files = HashMap::new();
+
+        for record in reader.records() {
+            let record = record?;
+            let original_path = PathBuf::from(record.get(path_idx).unwrap_or_default());
+            let new_name = record.get(name_idx).unwrap_or_default().trim().to_string();
+            let entry = FileEntry::from_path(original_path.clone(), 0)?;
+            let new_path = original_path
+                .parent()
+                .map(|parent| parent.join(&new_name))
+                .unwrap_or_else(|| PathBuf::from(&new_name));
+            let status = if new_name == entry.original_name {
+                RenameStatus::Unchanged
+            } else {
+                RenameStatus::WillRename
+            };
+            previews.push(RenamePreview {
+                file_id: entry.id,
+                original_name: entry.original_name.clone(),
+                new_name,
+                new_path,
+                status,
+                message: None,
+            });
+            files.insert(entry.id, entry);
+        }
+
+        Ok((previews, files))
     }
 }
 
 // ============ Utility Functions ============
 
 fn get_icon_for_extension(ext: Option<&str>) -> &'static str {
-    match ext {
+    match ext.map(str::to_ascii_lowercase).as_deref() {
         Some("jpg") | Some("jpeg") | Some("png") | Some("gif") | Some("webp") | Some("svg") => {
             "image-x-generic-symbolic"
         }
@@ -3236,15 +3944,27 @@ fn get_icon_for_extension(ext: Option<&str>) -> &'static str {
         Some("pdf") => "x-office-document-symbolic",
         Some("doc") | Some("docx") | Some("odt") => "x-office-document-symbolic",
         Some("xls") | Some("xlsx") | Some("ods") => "x-office-spreadsheet-symbolic",
-        Some("txt") | Some("md") | Some("rst") => "text-x-generic-symbolic",
-        Some("rs") | Some("py") | Some("js") | Some("ts") | Some("c") | Some("cpp") => {
-            "text-x-script-symbolic"
-        }
+        Some("ppt") | Some("pptx") | Some("odp") => "x-office-presentation-symbolic",
+        Some("txt") | Some("md") | Some("rst") | Some("html") | Some("htm") | Some("xml")
+        | Some("json") | Some("yaml") | Some("yml") | Some("toml") => "text-x-generic-symbolic",
+        Some("rs") | Some("py") | Some("js") | Some("ts") | Some("c") | Some("cpp")
+        | Some("h") | Some("hpp") | Some("css") | Some("scss") => "text-x-generic-symbolic",
         Some("zip") | Some("tar") | Some("gz") | Some("7z") | Some("rar") => {
             "package-x-generic-symbolic"
         }
+        Some("appimage") | Some("exe") | Some("deb") | Some("rpm") => {
+            "application-x-executable-symbolic"
+        }
         _ => "text-x-generic-symbolic",
     }
+}
+
+fn get_icon_for_filename(name: &str) -> &'static str {
+    std::path::Path::new(name)
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| get_icon_for_extension(Some(ext)))
+        .unwrap_or("text-x-generic-symbolic")
 }
 
 fn format_size(size: u64) -> String {

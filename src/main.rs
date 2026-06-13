@@ -38,10 +38,19 @@ fn main() -> glib::ExitCode {
 
     // Connect to startup signal to load CSS after GTK is initialized
     app.connect_startup(|_| {
+        register_resources();
         load_css();
     });
 
     app.run()
+}
+
+fn register_resources() {
+    let bytes = glib::Bytes::from_static(include_bytes!(env!("GRESOURCE_FILE")));
+    match gio::Resource::from_data(&bytes) {
+        Ok(resource) => gio::resources_register(&resource),
+        Err(err) => tracing::error!("Failed to register resources: {}", err),
+    }
 }
 
 fn load_css() {

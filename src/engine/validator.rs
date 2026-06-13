@@ -6,6 +6,7 @@ use crate::core::{
 };
 use std::collections::HashMap;
 use std::path::Path;
+use uuid::Uuid;
 
 /// Reserved filenames on Windows.
 const WINDOWS_RESERVED: &[&str] = &[
@@ -78,7 +79,7 @@ impl RenameValidator {
         }
 
         // Check for invalid characters
-        let invalid_chars = if cfg!(windows) {
+        let invalid_chars = if cfg!(windows) || self.check_platform_restrictions {
             INVALID_CHARS_WINDOWS
         } else {
             INVALID_CHARS_UNIX
@@ -145,8 +146,35 @@ impl RenameValidator {
 
     /// Validate a batch of rename previews for conflicts.
     pub fn validate_batch(&self, previews: &[RenamePreview]) -> Vec<ValidationError> {
+        self.validate_batch_internal(previews, None)
+    }
+
+    /// Validate a batch of rename previews with source file access checks.
+    pub fn validate_batch_with_files(
+        &self,
+        previews: &[RenamePreview],
+        files: &HashMap<Uuid, FileEntry>,
+    ) -> Vec<ValidationError> {
+        self.validate_batch_internal(previews, Some(files))
+    }
+
+    fn validate_batch_internal(
+        &self,
+        previews: &[RenamePreview],
+        files: Option<&HashMap<Uuid, FileEntry>>,
+    ) -> Vec<ValidationError> {
         let mut errors = Vec::new();
         let mut target_names: HashMap<String, Vec<usize>> = HashMap::new();
+        let source_paths: std::collections::HashSet<String> = files
+            .map(|files| {
+                previews
+                    .iter()
+                    .filter(|preview| matches!(preview.status, RenameStatus::WillRename))
+                    .filter_map(|preview| files.get(&preview.file_id))
+                    .map(|entry| entry.path.to_string_lossy().to_lowercase())
+                    .collect()
+            })
+            .unwrap_or_default();
 
         // First pass: collect all target names and check for individual errors
         for (idx, preview) in previews.iter().enumerate() {
@@ -155,8 +183,65 @@ impl RenameValidator {
                 continue;
             }
 
+            if let Err(err) = self.validate_path(&preview.new_path) {
+                errors.push(ValidationError {
+                    file_index: idx,
+                    original_name: preview.original_name.clone(),
+                    error_type: match err {
+                        RenamerError::PathTooLong { .. } => ValidationErrorType::PathTooLong,
+                        RenamerError::InvalidFilename { .. } => {
+                            if preview.new_name.trim().is_empty() {
+                                ValidationErrorType::NameEmpty
+                            } else {
+                                ValidationErrorType::InvalidCharacters
+                            }
+                        }
+                        _ => ValidationErrorType::InvalidCharacters,
+                    },
+                    message: err.to_string(),
+                });
+                continue;
+            }
+
+            if let Some(files) = files {
+                match files.get(&preview.file_id) {
+                    Some(entry) => {
+                        if let Err(err) = self.check_file_access(entry) {
+                            errors.push(ValidationError {
+                                file_index: idx,
+                                original_name: preview.original_name.clone(),
+                                error_type: match err {
+                                    RenamerError::FileNotFound { .. } => {
+                                        ValidationErrorType::FileNotFound
+                                    }
+                                    RenamerError::PermissionDenied { .. } => {
+                                        ValidationErrorType::PermissionDenied
+                                    }
+                                    _ => ValidationErrorType::PermissionDenied,
+                                },
+                                message: err.to_string(),
+                            });
+                            continue;
+                        }
+                    }
+                    None => {
+                        errors.push(ValidationError {
+                            file_index: idx,
+                            original_name: preview.original_name.clone(),
+                            error_type: ValidationErrorType::FileNotFound,
+                            message: "Source file is no longer in the rename queue".to_string(),
+                        });
+                        continue;
+                    }
+                }
+            }
+
             // Check if target path already exists on disk
-            if preview.new_path.exists() && preview.new_name != preview.original_name {
+            let new_path_key = preview.new_path.to_string_lossy().to_lowercase();
+            if preview.new_path.exists()
+                && preview.new_name != preview.original_name
+                && !source_paths.contains(&new_path_key)
+            {
                 errors.push(ValidationError {
                     file_index: idx,
                     original_name: preview.original_name.clone(),
@@ -167,9 +252,8 @@ impl RenameValidator {
             }
 
             // Track target names for internal conflict detection
-            let new_path_str = preview.new_path.to_string_lossy().to_lowercase();
             target_names
-                .entry(new_path_str.clone())
+                .entry(new_path_key)
                 .or_insert_with(Vec::new)
                 .push(idx);
         }
@@ -232,11 +316,7 @@ impl RenameValidator {
 
 /// Sanitize a filename by removing or replacing invalid characters.
 pub fn sanitize_filename(name: &str, replacement: char) -> String {
-    let invalid_chars: &[char] = if cfg!(windows) {
-        INVALID_CHARS_WINDOWS
-    } else {
-        INVALID_CHARS_UNIX
-    };
+    let invalid_chars: &[char] = INVALID_CHARS_WINDOWS;
 
     let mut result: String = name
         .chars()

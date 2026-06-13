@@ -129,7 +129,7 @@ fn parse_exif_datetime(s: &str) -> Option<DateTime<Local>> {
 
 /// Parse GPS coordinate from EXIF rational values.
 fn parse_gps_coordinate(value: &exif::Value, reference: &str) -> Option<f64> {
-    if let exif::Value::Rational(ref vec) = value {
+    if let exif::Value::Rational(vec) = value {
         if vec.len() >= 3 {
             let degrees = vec[0].num as f64 / vec[0].denom as f64;
             let minutes = vec[1].num as f64 / vec[1].denom as f64;

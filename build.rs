@@ -26,11 +26,13 @@ fn main() {
             println!("cargo:rustc-env=GRESOURCE_FILE={}", gresource_out.display());
         }
         Ok(status) => {
-            eprintln!("glib-compile-resources failed with status: {}", status);
+            panic!("glib-compile-resources failed with status: {}", status);
         }
         Err(e) => {
-            eprintln!("Failed to run glib-compile-resources: {}", e);
-            eprintln!("Make sure glib2-devel (or libglib2.0-dev) is installed.");
+            panic!(
+                "Failed to run glib-compile-resources: {}. Make sure glib2-devel (or libglib2.0-dev) is installed.",
+                e
+            );
         }
     }
 }
