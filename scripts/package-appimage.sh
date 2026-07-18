@@ -1,6 +1,14 @@
 #!/usr/bin/env bash
 # package-appimage.sh – Build AppImage package
 # Usage: ./scripts/package-appimage.sh
+#
+# RUNTIME REQUIREMENTS: this AppImage bundles only the application binary,
+# not the GTK stack. The host system must provide GTK4 >= 4.12 and
+# libadwaita >= 1.5 at runtime (see the AppImage note in README.md).
+#
+# The appimagetool download can be pinned by exporting APPIMAGETOOL_SHA256
+# with the checksum of a known-good build; the "continuous" release moves,
+# so no checksum is hardcoded here.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -45,12 +53,20 @@ exec "${HERE}/usr/bin/bulk-renamer" "$@"
 APPRUN
 chmod +x "$APPDIR/AppRun"
 
-# Download appimagetool if needed
+# Download appimagetool if needed (HTTPS, --fail so an error page is never
+# saved as the tool). Optionally verified against APPIMAGETOOL_SHA256.
 APPIMAGETOOL="dist/appimage/appimagetool"
 if [[ ! -x "$APPIMAGETOOL" ]]; then
     echo "Downloading appimagetool..."
     mkdir -p dist/appimage
-    curl -fsSL "https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage" -o "$APPIMAGETOOL"
+    curl --fail -sSL "https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage" -o "$APPIMAGETOOL"
+    if [[ -n "${APPIMAGETOOL_SHA256:-}" ]]; then
+        echo "${APPIMAGETOOL_SHA256}  ${APPIMAGETOOL}" | sha256sum -c - || {
+            echo "❌ appimagetool checksum mismatch" >&2
+            rm -f "$APPIMAGETOOL"
+            exit 1
+        }
+    fi
     chmod +x "$APPIMAGETOOL"
 fi
 

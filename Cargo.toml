@@ -54,6 +54,9 @@ filetime = "0.2"
 glob = "0.3"
 dirs = "5.0"
 
+# Internationalization
+gettext-rs = { version = "0.7", features = ["gettext-system"] }
+
 # Logging
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
@@ -106,8 +109,8 @@ path = "src/main.rs"
 
 # Debian package configuration
 [package.metadata.deb]
-maintainer = "Christos Daggas <chrisdaggas@example.com>"
-copyright = "2026, Christos Daggas"
+maintainer = "Christos Daggas <info@hotwebdesign.gr>"
+copyright = "2024-2026, Christos A. Daggas"
 license-file = ["LICENSE", "0"]
 extended-description = """\
 Bulk Renamer is a powerful GTK4/Libadwaita application for batch \

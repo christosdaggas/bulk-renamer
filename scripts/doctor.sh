@@ -22,6 +22,11 @@ echo "=== Required Tools ==="
 check cargo || MISSING=$((MISSING + 1))
 check rustc || MISSING=$((MISSING + 1))
 check pkg-config || MISSING=$((MISSING + 1))
+# build.rs hard-requires glib-compile-resources to compile the GResource bundle
+check glib-compile-resources || {
+    echo "   Install: glib2-devel (Fedora) / libglib2.0-dev-bin (Ubuntu/Debian)"
+    MISSING=$((MISSING + 1))
+}
 
 echo
 echo "=== Packaging Tools ==="
