@@ -5,13 +5,26 @@ use chrono::{DateTime, Local};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs::{self, File};
-use std::io::{BufReader, BufWriter};
+use std::io::{BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
+/// Current schema version for preset files.
+///
+/// Bump this when the on-disk format changes in a way that requires migration.
+pub const PRESET_SCHEMA_VERSION: u32 = 1;
+
+fn default_preset_version() -> u32 {
+    PRESET_SCHEMA_VERSION
+}
+
 /// A saved preset containing a rename configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Preset {
+    /// Schema version of the preset file (for future migrations).
+    #[serde(default = "default_preset_version")]
+    pub version: u32,
     /// Unique identifier.
     pub id: Uuid,
     /// Display name.
@@ -30,19 +43,30 @@ pub struct Preset {
     pub builtin: bool,
 }
 
-impl Preset {
-    /// Create a new preset from a config.
-    pub fn new(name: &str, config: RenameConfig) -> Self {
+impl Default for Preset {
+    fn default() -> Self {
         let now = Local::now();
         Self {
+            version: PRESET_SCHEMA_VERSION,
             id: Uuid::new_v4(),
-            name: name.to_string(),
+            name: String::from("Untitled"),
             description: None,
-            config,
+            config: RenameConfig::default(),
             created: now,
             modified: now,
             tags: Vec::new(),
             builtin: false,
+        }
+    }
+}
+
+impl Preset {
+    /// Create a new preset from a config.
+    pub fn new(name: &str, config: RenameConfig) -> Self {
+        Self {
+            name: name.to_string(),
+            config,
+            ..Self::default()
         }
     }
 
@@ -96,8 +120,19 @@ impl PresetManager {
             let path = entry.path();
 
             if path.extension().map(|e| e == "json").unwrap_or(false) {
-                if let Ok(preset) = self.load_preset_from_file(&path) {
-                    self.presets.insert(preset.id, preset);
+                match self.load_preset_from_file(&path) {
+                    Ok(preset) => {
+                        self.presets.insert(preset.id, preset);
+                    }
+                    Err(e) => {
+                        // Never delete or overwrite an unreadable preset file:
+                        // keep it on disk so the user can recover it manually.
+                        tracing::warn!(
+                            path = %path.display(),
+                            error = %e,
+                            "Failed to load preset file; skipping it but keeping it on disk"
+                        );
+                    }
                 }
             }
         }
@@ -117,9 +152,7 @@ impl PresetManager {
     /// Save a preset to disk.
     pub fn save_preset(&mut self, preset: &Preset) -> RenamerResult<()> {
         let path = self.presets_dir.join(format!("{}.json", preset.id));
-        let file = File::create(&path).map_err(|e| RenamerError::Io(e))?;
-        let writer = BufWriter::new(file);
-        serde_json::to_writer_pretty(writer, preset).map_err(|e| RenamerError::JsonError(e))?;
+        write_json_atomic(&path, preset)?;
 
         // Update in-memory cache
         self.presets.insert(preset.id, preset.clone());
@@ -205,11 +238,7 @@ impl PresetManager {
             .get(id)
             .ok_or(RenamerError::PresetNotFound { name: id.to_string() })?;
 
-        let file = File::create(path).map_err(|e| RenamerError::Io(e))?;
-        let writer = BufWriter::new(file);
-        serde_json::to_writer_pretty(writer, preset).map_err(|e| RenamerError::JsonError(e))?;
-
-        Ok(())
+        write_json_atomic(path, preset)
     }
 
     /// Import a preset from a file.
@@ -285,6 +314,38 @@ impl Default for PresetManager {
 
         Self::new(presets_dir)
     }
+}
+
+/// Atomically write a value as pretty-printed JSON to `path`.
+///
+/// The data is first written to a temporary file in the same directory and
+/// then renamed over the target, so a crash mid-write can never leave a
+/// truncated or corrupt file at `path`. The temp file uses a non-`.json`
+/// extension so preset loading never picks up leftovers.
+fn write_json_atomic<T: Serialize>(path: &Path, value: &T) -> RenamerResult<()> {
+    let dir = path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
+    let file_name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("preset.json");
+    let tmp_path = dir.join(format!("{}.tmp-{}", file_name, Uuid::new_v4().simple()));
+
+    let result = (|| {
+        let file = File::create(&tmp_path).map_err(RenamerError::Io)?;
+        let mut writer = BufWriter::new(file);
+        serde_json::to_writer_pretty(&mut writer, value).map_err(RenamerError::JsonError)?;
+        writer.flush().map_err(RenamerError::Io)?;
+        // Make sure the bytes hit the disk before the rename makes them visible.
+        writer.get_ref().sync_all().map_err(RenamerError::Io)?;
+        fs::rename(&tmp_path, path).map_err(RenamerError::Io)?;
+        Ok(())
+    })();
+
+    if result.is_err() {
+        let _ = fs::remove_file(&tmp_path);
+    }
+
+    result
 }
 
 /// Create built-in presets.
@@ -496,4 +557,152 @@ fn create_builtin_presets() -> Vec<Preset> {
     presets.push(preset);
 
     presets
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Create a unique, empty directory for a test.
+    fn test_dir() -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("bulk-renamer-preset-test-{}", Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn temp_files_in(dir: &Path) -> Vec<PathBuf> {
+        fs::read_dir(dir)
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .filter(|p| {
+                p.file_name()
+                    .and_then(|n| n.to_str())
+                    .map(|n| n.contains(".tmp-"))
+                    .unwrap_or(false)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn atomic_save_writes_valid_file_and_leaves_no_temp_files() {
+        let dir = test_dir();
+        let mut manager = PresetManager::new(dir.clone());
+
+        let preset = Preset::new("Atomic Test", RenameConfig::default());
+        manager.save_preset(&preset).unwrap();
+        // Save again to exercise the overwrite path (rename over existing target).
+        manager.save_preset(&preset).unwrap();
+
+        let target = dir.join(format!("{}.json", preset.id));
+        assert!(target.exists(), "target preset file must exist after save");
+
+        // The saved file must be complete, valid JSON.
+        let content = fs::read_to_string(&target).unwrap();
+        let loaded: Preset = serde_json::from_str(&content).unwrap();
+        assert_eq!(loaded.id, preset.id);
+        assert_eq!(loaded.name, "Atomic Test");
+        assert_eq!(loaded.version, PRESET_SCHEMA_VERSION);
+
+        // No temporary files may be left behind.
+        let leftovers = temp_files_in(&dir);
+        assert!(leftovers.is_empty(), "leftover temp files: {:?}", leftovers);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn corrupt_preset_file_is_kept_and_others_still_load() {
+        let dir = test_dir();
+
+        // Save a valid user preset with a first manager.
+        let mut manager = PresetManager::new(dir.clone());
+        let preset = Preset::new("Survivor", RenameConfig::default());
+        manager.save_preset(&preset).unwrap();
+        drop(manager);
+
+        // Plant a corrupt preset file.
+        let corrupt_path = dir.join("corrupt.json");
+        let corrupt_content = "{ this is definitely not valid json";
+        fs::write(&corrupt_path, corrupt_content).unwrap();
+
+        // Reload everything with a fresh manager.
+        let manager = PresetManager::new(dir.clone());
+
+        // The corrupt file must survive on disk, byte for byte.
+        assert!(corrupt_path.exists(), "corrupt preset file must not be deleted");
+        assert_eq!(fs::read_to_string(&corrupt_path).unwrap(), corrupt_content);
+
+        // Valid presets must still load.
+        assert!(manager.get_preset_by_name("Survivor").is_some());
+        assert!(manager.get_preset(&preset.id).is_some());
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn pre_versioning_preset_json_still_deserializes() {
+        // Hand-written JSON as written by builds that predate the `version` field.
+        let json = r#"{
+            "id": "550e8400-e29b-41d4-a716-446655440000",
+            "name": "Legacy Preset",
+            "description": "Saved before schema versioning",
+            "config": {
+                "id": "550e8400-e29b-41d4-a716-446655440001",
+                "name": "Legacy Config",
+                "rules": [
+                    {
+                        "id": "550e8400-e29b-41d4-a716-446655440002",
+                        "enabled": true,
+                        "rule_type": {
+                            "type": "Replace",
+                            "find": " ",
+                            "replace": "_",
+                            "use_regex": false,
+                            "case_sensitive": true,
+                            "replace_all": true,
+                            "include_extension": false
+                        }
+                    }
+                ],
+                "separate_extension": true,
+                "filter": null
+            },
+            "created": "2024-03-01T12:00:00+02:00",
+            "modified": "2024-03-01T12:00:00+02:00",
+            "tags": ["legacy"],
+            "builtin": false
+        }"#;
+
+        let preset: Preset = serde_json::from_str(json).unwrap();
+        assert_eq!(preset.version, PRESET_SCHEMA_VERSION);
+        assert_eq!(preset.name, "Legacy Preset");
+        assert_eq!(preset.config.name, "Legacy Config");
+        assert_eq!(preset.config.rules.len(), 1);
+        assert_eq!(preset.tags, vec!["legacy".to_string()]);
+        assert!(!preset.builtin);
+    }
+
+    #[test]
+    fn rule_missing_id_and_enabled_gets_defaults() {
+        // A rule written without `id`/`enabled` (e.g. by a future or trimmed
+        // format) must still load, with `enabled` defaulting to true.
+        let json = r#"{
+            "id": "550e8400-e29b-41d4-a716-446655440010",
+            "name": "Tolerant Config",
+            "rules": [
+                {
+                    "rule_type": {
+                        "type": "Expression",
+                        "expression": "${name}"
+                    }
+                }
+            ],
+            "separate_extension": true,
+            "filter": null
+        }"#;
+
+        let config: RenameConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(config.rules.len(), 1);
+        assert!(config.rules[0].enabled);
+    }
 }

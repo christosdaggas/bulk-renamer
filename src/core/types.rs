@@ -217,10 +217,22 @@ pub enum ThemePreference {
     Dark,
 }
 
+/// Current schema version for the settings file.
+///
+/// Bump this when the on-disk format changes in a way that requires migration.
+pub const SETTINGS_SCHEMA_VERSION: u32 = 1;
+
+fn default_settings_version() -> u32 {
+    SETTINGS_SCHEMA_VERSION
+}
+
 /// Application settings.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AppSettings {
+    /// Schema version of the settings file (for future migrations).
+    #[serde(default = "default_settings_version")]
+    pub version: u32,
     pub theme: ThemePreference,
     pub accent_color: Option<String>,
     pub confirm_before_rename: bool,
@@ -244,6 +256,7 @@ pub struct AppSettings {
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
+            version: SETTINGS_SCHEMA_VERSION,
             theme: ThemePreference::System,
             accent_color: None,
             confirm_before_rename: true,
@@ -288,20 +301,54 @@ impl AppSettings {
     pub fn save(&self) -> Result<(), String> {
         let path = Self::config_path()
             .ok_or_else(|| "Could not determine config directory".to_string())?;
-        
+
+        self.save_to_path(&path)
+    }
+
+    /// Save settings to a specific path, atomically.
+    ///
+    /// The data is first written to a temporary file in the same directory
+    /// and then renamed over the target, so a crash mid-write can never
+    /// leave a truncated or corrupt settings file behind.
+    pub fn save_to_path(&self, path: &std::path::Path) -> Result<(), String> {
         // Create parent directories if needed
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)
                 .map_err(|e| format!("Failed to create config directory: {}", e))?;
         }
-        
+
         let content = toml::to_string_pretty(self)
             .map_err(|e| format!("Failed to serialize settings: {}", e))?;
-        
-        fs::write(&path, content)
-            .map_err(|e| format!("Failed to write config file: {}", e))?;
-        
-        Ok(())
+
+        let dir = path
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .unwrap_or(std::path::Path::new("."));
+        let file_name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("settings.toml");
+        let tmp_path = dir.join(format!("{}.tmp-{}", file_name, Uuid::new_v4().simple()));
+
+        let result = (|| {
+            use std::io::Write;
+            let mut file = fs::File::create(&tmp_path)
+                .map_err(|e| format!("Failed to create temp config file: {}", e))?;
+            file.write_all(content.as_bytes())
+                .map_err(|e| format!("Failed to write temp config file: {}", e))?;
+            // Make sure the bytes hit the disk before the rename makes them visible.
+            file.sync_all()
+                .map_err(|e| format!("Failed to sync temp config file: {}", e))?;
+            fs::rename(&tmp_path, path)
+                .map_err(|e| format!("Failed to write config file: {}", e))?;
+            Ok(())
+        })();
+
+        if result.is_err() {
+            let _ = fs::remove_file(&tmp_path);
+        }
+
+        result
     }
 }
 
@@ -332,5 +379,64 @@ impl RenameBatch {
             records,
             description: None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn settings_save_to_path_is_atomic_and_valid() {
+        let dir = std::env::temp_dir().join(format!("bulk-renamer-settings-test-{}", Uuid::new_v4()));
+        let path = dir.join("settings.toml");
+
+        let mut settings = AppSettings::default();
+        settings.window_width = 1024;
+        settings.save_to_path(&path).unwrap();
+        // Save again to exercise the overwrite path (rename over existing target).
+        settings.save_to_path(&path).unwrap();
+
+        assert!(path.exists(), "settings file must exist after save");
+
+        // The saved file must be complete, valid TOML.
+        let content = fs::read_to_string(&path).unwrap();
+        let loaded: AppSettings = toml::from_str(&content).unwrap();
+        assert_eq!(loaded.window_width, 1024);
+        assert_eq!(loaded.version, SETTINGS_SCHEMA_VERSION);
+
+        // No temporary files may be left behind.
+        let leftovers: Vec<_> = fs::read_dir(&dir)
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .filter(|p| {
+                p.file_name()
+                    .and_then(|n| n.to_str())
+                    .map(|n| n.contains(".tmp-"))
+                    .unwrap_or(false)
+            })
+            .collect();
+        assert!(leftovers.is_empty(), "leftover temp files: {:?}", leftovers);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn settings_toml_without_version_loads() {
+        // Settings written by builds that predate the `version` field.
+        let toml_str = r#"
+            theme = "Dark"
+            confirm_before_rename = false
+            window_width = 900
+        "#;
+
+        let settings: AppSettings = toml::from_str(toml_str).unwrap();
+        assert_eq!(settings.version, SETTINGS_SCHEMA_VERSION);
+        assert_eq!(settings.theme, ThemePreference::Dark);
+        assert!(!settings.confirm_before_rename);
+        assert_eq!(settings.window_width, 900);
+        // Missing fields fall back to defaults.
+        assert!(settings.live_preview);
+        assert_eq!(settings.max_path_length, 4096);
     }
 }

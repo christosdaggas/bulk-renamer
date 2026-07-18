@@ -4,7 +4,11 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 /// A complete rename configuration consisting of multiple rules.
+///
+/// `#[serde(default)]` lets configs written by older versions (or with fields
+/// added in future versions) load gracefully instead of failing outright.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct RenameConfig {
     /// Unique identifier.
     pub id: Uuid,
@@ -30,12 +34,18 @@ impl Default for RenameConfig {
     }
 }
 
+fn default_rule_enabled() -> bool {
+    true
+}
+
 /// A single rename rule.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RenameRule {
     /// Unique identifier for this rule.
+    #[serde(default = "Uuid::new_v4")]
     pub id: Uuid,
     /// Whether this rule is enabled.
+    #[serde(default = "default_rule_enabled")]
     pub enabled: bool,
     /// The rule type and configuration.
     pub rule_type: RuleType,
@@ -85,6 +95,7 @@ pub enum RuleType {
 
 /// Replace rule configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct ReplaceRule {
     /// Text or pattern to find.
     pub find: String,
@@ -256,6 +267,7 @@ pub enum CaseType {
 
 /// Numbering rule configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct NumberingRule {
     /// Starting number.
     pub start: i64,
@@ -435,6 +447,7 @@ pub enum MetadataField {
 
 /// Cleanup rule configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct CleanupRule {
     /// Remove extra spaces.
     pub collapse_spaces: bool,
@@ -485,6 +498,7 @@ pub enum TransliterationMapping {
 
 /// Counter configuration for numbering.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct CounterConfig {
     pub start: i64,
     pub increment: i64,
@@ -504,7 +518,8 @@ impl Default for CounterConfig {
 }
 
 /// Filter configuration for selecting files.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
 pub struct FilterConfig {
     /// Include/exclude mode.
     pub mode: FilterMode,
