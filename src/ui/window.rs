@@ -14,7 +14,7 @@ use adw::subclass::prelude::*;
 use gtk4 as gtk;
 use gtk::{gio, glib};
 use glib::clone;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use uuid::Uuid;
@@ -40,6 +40,8 @@ mod imp {
         pub rename_button: RefCell<Option<gtk::Button>>,
         pub undo_manager: RefCell<UndoManager>,
         pub logger: RefCell<RenameLogger>,
+        pub preview_pending: RefCell<Option<glib::SourceId>>,
+        pub busy: Cell<bool>,
     }
 
     #[glib::object_subclass]
@@ -562,7 +564,7 @@ impl RenamerWindow {
                     _ => RenameTarget::FilesOnly,
                 };
                 *window.imp().target.borrow_mut() = target;
-                window.update_preview();
+                window.request_preview();
             }
         ));
 
@@ -571,7 +573,7 @@ impl RenamerWindow {
             self,
             move |row| {
                 window.imp().config.borrow_mut().separate_extension = row.is_active();
-                window.update_preview();
+                window.request_preview();
             }
         ));
 
@@ -1066,16 +1068,39 @@ impl RenamerWindow {
                         }
                     }
                 ));
-            } else if let Ok(mut file_entry) = FileEntry::from_path(path, 0) {
-                if self.imp().settings.borrow().metadata_loading_enabled {
-                    let _ = crate::metadata::load_metadata(&mut file_entry);
-                }
-                entries.push(file_entry);
+            } else {
+                entries.push(path);
             }
         }
 
+        // Plain files also load off the main thread: metadata parsing (EXIF,
+        // ID3, image probing) is file I/O and a large drop used to freeze the UI.
         if !entries.is_empty() {
-            self.append_file_entries(entries);
+            let settings = self.imp().settings.borrow().clone();
+            let (sender, receiver) = async_channel::bounded::<Vec<FileEntry>>(1);
+
+            gio::spawn_blocking(move || {
+                let mut loaded = Vec::new();
+                for path in entries {
+                    if let Ok(mut file_entry) = FileEntry::from_path(path, 0) {
+                        if settings.metadata_loading_enabled && file_entry.metadata_cache.is_none() {
+                            let _ = crate::metadata::load_metadata(&mut file_entry);
+                        }
+                        loaded.push(file_entry);
+                    }
+                }
+                let _ = sender.send_blocking(loaded);
+            });
+
+            glib::spawn_future_local(clone!(
+                #[weak(rename_to = window)]
+                self,
+                async move {
+                    if let Ok(loaded) = receiver.recv().await {
+                        window.append_file_entries(loaded);
+                    }
+                }
+            ));
         }
     }
 
@@ -1090,7 +1115,7 @@ impl RenamerWindow {
             store.splice(store.n_items(), 0, &items);
         }
         self.refresh_file_count();
-        self.update_preview();
+        self.request_preview_debounced();
     }
 
     pub fn clear_files(&self) {
@@ -1099,7 +1124,7 @@ impl RenamerWindow {
         }
         self.imp().previews.borrow_mut().clear();
         self.refresh_file_count();
-        self.update_preview();
+        self.request_preview();
     }
 
     fn remove_selected_files(&self) {
@@ -1119,7 +1144,7 @@ impl RenamerWindow {
             store.remove(idx);
         }
         self.refresh_file_count();
-        self.update_preview();
+        self.request_preview();
     }
 
     /// Every FileItem currently in the list model.
@@ -1158,6 +1183,55 @@ impl RenamerWindow {
         if let Some(label) = self.imp().selected_count_label.borrow().as_ref() {
             label.set_label(&format!("{} selected", count));
         }
+    }
+
+    /// Recompute the preview if Live Preview is enabled. Explicit refreshes
+    /// (the refresh button, executing, saving preferences) call
+    /// `update_preview` directly instead.
+    pub(crate) fn request_preview(&self) {
+        if !self.imp().settings.borrow().live_preview {
+            return;
+        }
+        self.update_preview();
+    }
+
+    /// Debounced variant for bursty sources (directory scans arriving in
+    /// waves): coalesces every request inside an 80 ms window into one pass.
+    fn request_preview_debounced(&self) {
+        if !self.imp().settings.borrow().live_preview {
+            return;
+        }
+        if self.imp().preview_pending.borrow().is_some() {
+            return;
+        }
+        let weak = self.downgrade();
+        let id = glib::timeout_add_local_once(std::time::Duration::from_millis(80), move || {
+            if let Some(window) = weak.upgrade() {
+                window.imp().preview_pending.replace(None);
+                window.update_preview();
+            }
+        });
+        self.imp().preview_pending.replace(Some(id));
+    }
+
+    /// A blocking operation (rename, undo, redo) is in flight; used to guard
+    /// re-entrancy from accelerators while the progress dialog is up.
+    pub(crate) fn is_busy(&self) -> bool {
+        self.imp().busy.get()
+    }
+
+    pub(crate) fn set_busy(&self, busy: bool) {
+        self.imp().busy.set(busy);
+    }
+
+    /// Move the undo manager to a worker thread; always pair with
+    /// `restore_undo_manager`.
+    pub(crate) fn take_undo_manager(&self) -> UndoManager {
+        self.imp().undo_manager.take()
+    }
+
+    pub(crate) fn restore_undo_manager(&self, manager: UndoManager) {
+        self.imp().undo_manager.replace(manager);
     }
 
     // ============ Preview ============
@@ -1225,21 +1299,45 @@ impl RenamerWindow {
     // ============ Rename Operations ============
 
     pub fn execute_rename(&self) {
-        if !self.imp().settings.borrow().confirm_before_rename {
-            self.perform_rename();
+        if self.is_busy() {
             return;
         }
+        // Recompute so the accelerator cannot execute a stale or conflicting
+        // plan the Rename button would have refused.
+        self.update_preview();
 
-        let to_rename_count = {
+        let (to_rename_count, blocked) = {
             let previews = self.imp().previews.borrow();
-            previews
+            let renames = previews
                 .iter()
                 .filter(|p| matches!(p.status, RenameStatus::WillRename))
-                .count()
+                .count();
+            let blocked = previews.iter().any(|p| {
+                matches!(
+                    p.status,
+                    RenameStatus::Conflict
+                        | RenameStatus::InternalConflict
+                        | RenameStatus::Error
+                        | RenameStatus::Failed
+                )
+            });
+            (renames, blocked)
         };
 
         if to_rename_count == 0 {
             self.show_info_dialog("Nothing to Rename", "No files will be renamed with the current rules.");
+            return;
+        }
+        if blocked {
+            self.show_info_dialog(
+                "Rename Blocked",
+                "Resolve the conflicts and errors shown in the preview first.",
+            );
+            return;
+        }
+
+        if !self.imp().settings.borrow().confirm_before_rename {
+            self.perform_rename();
             return;
         }
 
@@ -1274,10 +1372,7 @@ impl RenamerWindow {
             .collect();
 
         let previews = self.imp().previews.borrow().clone();
-        match crate::engine::execute_renames(&previews, &files) {
-            Ok(result) => self.handle_rename_result(result),
-            Err(err) => self.show_info_dialog("Rename Blocked", &err.to_string()),
-        }
+        super::execution::run_rename(self, previews, files);
     }
 
     pub(crate) fn handle_rename_result(&self, result: crate::engine::RenameBatchResult) {
@@ -1394,7 +1489,7 @@ impl RenamerWindow {
     /// longer matches what was recorded. That refusal is the one outcome a user has
     /// to act on, so the per-record reason has to reach the dialog rather than be
     /// implied by a shortfall in the count.
-    fn undo_result_message(summary: String, result: &UndoResult) -> String {
+    pub(crate) fn undo_result_message(summary: String, result: &UndoResult) -> String {
         const MAX_REASONS: usize = 5;
 
         let reasons: Vec<&str> = result
@@ -1422,41 +1517,11 @@ impl RenamerWindow {
     }
 
     fn undo_last_batch(&self) {
-        match self.imp().undo_manager.borrow_mut().undo() {
-            Ok(result) => {
-                let summary = format!(
-                    "Restored {} of {} renamed files.",
-                    result.success_count, result.total_records
-                );
-                let title = if result.all_successful() {
-                    "Undo Complete"
-                } else {
-                    "Undo Incomplete"
-                };
-                self.show_info_dialog(title, &Self::undo_result_message(summary, &result));
-                self.update_preview();
-            }
-            Err(err) => self.show_info_dialog("Undo Unavailable", &err.to_string()),
-        }
+        super::execution::run_undo(self);
     }
 
     fn redo_last_batch(&self) {
-        match self.imp().undo_manager.borrow_mut().redo() {
-            Ok(result) => {
-                let summary = format!(
-                    "Renamed {} of {} files again.",
-                    result.success_count, result.total_records
-                );
-                let title = if result.all_successful() {
-                    "Redo Complete"
-                } else {
-                    "Redo Incomplete"
-                };
-                self.show_info_dialog(title, &Self::undo_result_message(summary, &result));
-                self.update_preview();
-            }
-            Err(err) => self.show_info_dialog("Redo Unavailable", &err.to_string()),
-        }
+        super::execution::run_redo(self);
     }
 
     fn show_preferences_dialog(&self) {
@@ -1550,7 +1615,7 @@ impl RenamerWindow {
         if let Some(rules_list) = self.imp().rules_list.borrow().as_ref() {
             self.rebuild_rules_list(rules_list);
         }
-        self.update_preview();
+        self.request_preview();
     }
 
     // Thin rule builders kept for the quick-rule actions and the widget tests;
@@ -1831,7 +1896,7 @@ impl RenamerWindow {
                     config.rules.remove(idx);
                 }
                 drop(config);
-                window.update_preview();
+                window.request_preview();
             }
         });
 
@@ -1851,7 +1916,7 @@ impl RenamerWindow {
 
         // Rebuild the rules list UI
         self.rebuild_rules_list(rules_list);
-        self.update_preview();
+        self.request_preview();
     }
 
     fn rebuild_rules_list(&self, rules_list: &gtk::ListBox) {
@@ -1905,7 +1970,7 @@ impl RenamerWindow {
         if let Some(rules_list) = self.imp().rules_list.borrow().as_ref() {
             self.rebuild_rules_list(rules_list);
         }
-        self.update_preview();
+        self.request_preview();
         self.show_info_dialog("Preset Loaded", &format!("Loaded '{}'.", preset.name));
     }
 
@@ -2122,6 +2187,22 @@ mod tests {
         dir
     }
 
+    /// Plain-file adds load entries on a worker thread; pump the main context
+    /// until they land in the store (or fail loudly).
+    fn wait_for_files(window: &RenamerWindow, count: usize) {
+        let context = glib::MainContext::default();
+        let start = std::time::Instant::now();
+        while window.file_entries().len() < count {
+            context.iteration(true);
+            assert!(
+                start.elapsed() < std::time::Duration::from_secs(10),
+                "timed out waiting for {} files, have {}",
+                count,
+                window.file_entries().len()
+            );
+        }
+    }
+
     fn scenario_adding_many_paths_rebuilds_the_list_once() {
         let window = test_window();
         let dir = temp_dir("batch-add");
@@ -2132,6 +2213,7 @@ mod tests {
         // Seed the list so the count label already has a value, then count how many
         // times refresh_file_count rewrites it while adding the rest.
         window.add_path(dir.join("a.txt"));
+        wait_for_files(&window, 1);
         let label = window
             .imp()
             .files_count_label
@@ -2145,6 +2227,7 @@ mod tests {
         });
 
         window.add_paths(vec![dir.join("b.txt"), dir.join("c.txt")]);
+        wait_for_files(&window, 3);
 
         assert_eq!(window.file_entries().len(), 3);
         assert_eq!(rebuilds.get(), 1, "two paths must cost one list rebuild");
@@ -2161,6 +2244,7 @@ mod tests {
         }
 
         window.add_paths(vec![dir.join("keep_a.txt"), dir.join("keep_b.txt")]);
+        wait_for_files(&window, 2);
         add_replace(&window, &rules_list, "keep");
 
         // Real pipeline: update_preview generated and validated the previews above.

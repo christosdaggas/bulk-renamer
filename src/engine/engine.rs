@@ -1182,15 +1182,49 @@ fn reject_nested_items(items: &[RenamePlanItem]) -> RenamerResult<()> {
     Ok(())
 }
 
+/// Error string used for items that were not renamed because the user
+/// cancelled the batch. The rollback restores everything, so a result whose
+/// failures all carry this reason means "nothing changed".
+pub const CANCELLED: &str = "cancelled by the user";
+
 /// Execute a prepared rename plan using two phases to avoid source/target swaps
 /// overwriting each other.
 pub fn execute_rename_plan(plan: RenamePlan) -> RenameBatchResult {
+    execute_rename_plan_with(plan, |_, _| {}, &std::sync::atomic::AtomicBool::new(false))
+}
+
+/// Progress- and cancellation-aware executor. `progress(done, total)` is called
+/// after each filesystem move; `total` counts both phases. A cancellation
+/// requested between moves unwinds exactly like a failure, so the batch stays
+/// all-or-nothing: either every rename lands or every file is back where it was.
+pub fn execute_rename_plan_with(
+    plan: RenamePlan,
+    progress: impl Fn(usize, usize),
+    cancel: &std::sync::atomic::AtomicBool,
+) -> RenameBatchResult {
+    use std::sync::atomic::Ordering;
+
+    let total_steps = plan.items.len() * 2;
+    let mut done_steps = 0;
     let mut staged = Vec::new();
     let mut failures = Vec::new();
 
     for item in plan.items {
+        if cancel.load(Ordering::Relaxed) {
+            failures.push(RenameFailure {
+                file_id: item.file_id,
+                original_path: Some(item.original_path),
+                target_path: item.new_path,
+                error: CANCELLED.to_string(),
+            });
+            continue;
+        }
         match std::fs::rename(&item.original_path, &item.temp_path) {
-            Ok(()) => staged.push(item),
+            Ok(()) => {
+                done_steps += 1;
+                progress(done_steps, total_steps);
+                staged.push(item);
+            }
             Err(err) => failures.push(RenameFailure {
                 file_id: item.file_id,
                 original_path: Some(item.original_path),
@@ -1229,7 +1263,9 @@ pub fn execute_rename_plan(plan: RenamePlan) -> RenameBatchResult {
         // Phase 1 vacated every source in the batch, so anything occupying a destination
         // now arrived from outside it. std::fs::rename replaces the destination silently,
         // which would destroy a file nobody asked this batch to touch.
-        let moved = if path_is_occupied(&item.new_path) {
+        let moved = if cancel.load(Ordering::Relaxed) {
+            Err(CANCELLED.to_string())
+        } else if path_is_occupied(&item.new_path) {
             Err(format!("'{}' already exists", item.new_path.display()))
         } else {
             std::fs::rename(&item.temp_path, &item.new_path).map_err(|err| err.to_string())
@@ -1256,6 +1292,8 @@ pub fn execute_rename_plan(plan: RenamePlan) -> RenameBatchResult {
             };
         }
 
+        done_steps += 1;
+        progress(done_steps, total_steps);
         successes.push(RenameRecord {
             id: Uuid::new_v4(),
             timestamp: Local::now(),
@@ -1368,6 +1406,17 @@ pub fn execute_renames(
 ) -> RenamerResult<RenameBatchResult> {
     let plan = plan_renames(previews, files)?;
     Ok(execute_rename_plan(plan))
+}
+
+/// Plan and execute with progress reporting and cooperative cancellation.
+pub fn execute_renames_with(
+    previews: &[RenamePreview],
+    files: &HashMap<Uuid, FileEntry>,
+    progress: impl Fn(usize, usize),
+    cancel: &std::sync::atomic::AtomicBool,
+) -> RenamerResult<RenameBatchResult> {
+    let plan = plan_renames(previews, files)?;
+    Ok(execute_rename_plan_with(plan, progress, cancel))
 }
 
 /// Filename limit (in bytes) of the common Linux filesystems.

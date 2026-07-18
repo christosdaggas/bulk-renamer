@@ -35,6 +35,7 @@ pub fn show(window: &RenamerWindow) {
         .build();
     let live_preview_row = adw::SwitchRow::builder()
         .title("Live Preview")
+        .subtitle("Recompute the preview automatically after every change")
         .active(settings.live_preview)
         .build();
     let show_unchanged_row = adw::SwitchRow::builder()

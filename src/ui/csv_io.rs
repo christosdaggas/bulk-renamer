@@ -79,10 +79,7 @@ fn import_csv_file(window: &RenamerWindow, path: PathBuf) {
                     window,
                     move |dialog, response| {
                         if response == "rename" {
-                            match crate::engine::execute_renames(&previews, &files) {
-                                Ok(result) => window.handle_rename_result(result),
-                                Err(err) => window.show_info_dialog("CSV Import Blocked", &err.to_string()),
-                            }
+                            super::execution::run_rename(&window, previews.clone(), files.clone());
                         }
                         dialog.close();
                     }
