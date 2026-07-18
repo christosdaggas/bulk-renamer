@@ -48,25 +48,53 @@ impl ExpressionEngine {
         let mut chars = template.chars().peekable();
 
         while let Some(c) = chars.next() {
-            if c == '$' && chars.peek() == Some(&'{') {
+            if c == '$' && chars.peek() == Some(&'$') {
+                // `$${` escapes to a literal `${`; any other `$$` passes through.
+                let mut lookahead = chars.clone();
+                lookahead.next(); // step past the second '$'
+                if lookahead.peek() == Some(&'{') {
+                    chars.next(); // consume the second '$'
+                    result.push('$');
+                    // The '{' is emitted as a literal on the next iteration.
+                } else {
+                    result.push(c);
+                }
+            } else if c == '$' && chars.peek() == Some(&'{') {
                 chars.next(); // consume '{'
-                
-                // Collect the expression inside ${}
+
+                // Collect the expression inside ${}. Braces inside string
+                // literals are content, not nesting, so track quote state
+                // (same delimiters as parse_args, which has no escapes).
                 let mut expr = String::new();
                 let mut depth = 1;
-                
+                let mut in_string = false;
+                let mut string_char = '"';
+
                 while let Some(c) = chars.next() {
-                    if c == '{' {
-                        depth += 1;
-                        expr.push(c);
-                    } else if c == '}' {
-                        depth -= 1;
-                        if depth == 0 {
-                            break;
+                    match c {
+                        '"' | '\'' => {
+                            if !in_string {
+                                in_string = true;
+                                string_char = c;
+                            } else if c == string_char {
+                                in_string = false;
+                            }
+                            expr.push(c);
                         }
-                        expr.push(c);
-                    } else {
-                        expr.push(c);
+                        '{' if !in_string => {
+                            depth += 1;
+                            expr.push(c);
+                        }
+                        '}' if !in_string => {
+                            depth -= 1;
+                            if depth == 0 {
+                                break;
+                            }
+                            expr.push(c);
+                        }
+                        _ => {
+                            expr.push(c);
+                        }
                     }
                 }
 
@@ -113,7 +141,9 @@ impl ExpressionEngine {
 
         for c in args_str.chars() {
             match c {
-                '"' | '\'' if depth == 0 => {
+                // String state must be tracked at every depth, so parens and
+                // commas inside a quoted argument of a nested call stay literal.
+                '"' | '\'' => {
                     if !in_string {
                         in_string = true;
                         string_char = c;
@@ -830,5 +860,82 @@ mod tests {
                 .expect("evaluate after reset"),
             "1"
         );
+    }
+
+    #[test]
+    fn quoted_closing_brace_does_not_end_the_placeholder() {
+        let engine = ExpressionEngine::new();
+        let entry = make_test_entry();
+
+        let result = engine
+            .evaluate(r#"${replace(name, "}", "_")}"#, &entry, "a}b")
+            .expect("evaluate quoted closing brace");
+        assert_eq!(result, "a_b");
+    }
+
+    #[test]
+    fn quoted_opening_brace_does_not_nest_the_placeholder() {
+        let engine = ExpressionEngine::new();
+        let entry = make_test_entry();
+
+        let result = engine
+            .evaluate(r#"${replace(name, "{", "_")}"#, &entry, "a{b")
+            .expect("evaluate quoted opening brace");
+        assert_eq!(result, "a_b");
+    }
+
+    #[test]
+    fn quoted_paren_inside_nested_call_stays_literal() {
+        let engine = ExpressionEngine::new();
+        let entry = make_test_entry();
+
+        let result = engine
+            .evaluate(r#"${concat(replace(name, "(", ""), "x")}"#, &entry, "a(b")
+            .expect("evaluate quoted paren in nested call");
+        assert_eq!(result, "abx");
+    }
+
+    #[test]
+    fn quoted_comma_is_a_single_argument() {
+        let engine = ExpressionEngine::new();
+        let entry = make_test_entry();
+
+        let result = engine
+            .evaluate(r#"${replace(name, ",", "-")}"#, &entry, "a,b")
+            .expect("evaluate quoted comma");
+        assert_eq!(result, "a-b");
+    }
+
+    #[test]
+    fn nested_calls_still_evaluate() {
+        let engine = ExpressionEngine::new();
+        let entry = make_test_entry();
+
+        let result = engine
+            .evaluate("${upper(replace(name, 'a', 'o'))}", &entry, "vacation")
+            .expect("evaluate nested call");
+        assert_eq!(result, "VOCOTION");
+
+        let result = engine
+            .evaluate("${concat(left(name, 3), '_', upper(right(name, 4)))}", &entry, "vacation")
+            .expect("evaluate multi-argument nested call");
+        assert_eq!(result, "vac_TION");
+    }
+
+    #[test]
+    fn double_dollar_escapes_a_literal_placeholder() {
+        let engine = ExpressionEngine::new();
+        let entry = make_test_entry();
+
+        let result = engine
+            .evaluate("$${name}_${name}", &entry, "vacation")
+            .expect("evaluate escaped placeholder");
+        assert_eq!(result, "${name}_vacation");
+
+        // `$$` not followed by `{` passes through untouched.
+        let result = engine
+            .evaluate("cost_$$5_${name}", &entry, "vacation")
+            .expect("evaluate plain double dollar");
+        assert_eq!(result, "cost_$$5_vacation");
     }
 }
