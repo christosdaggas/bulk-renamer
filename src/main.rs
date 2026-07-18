@@ -57,7 +57,7 @@ fn load_css() {
     let provider = gtk::CssProvider::new();
     
     // Try to load from compiled GResource first, fallback to file system
-    let gresource_path = "/org/gnome/BulkRenamerCosmic/style.css";
+    let gresource_path = "/com/chrisdaggas/BulkRenamer/style.css";
     
     // Check if the resource exists
     if gio::resources_lookup_data(gresource_path, gio::ResourceLookupFlags::NONE).is_ok() {
@@ -143,7 +143,7 @@ fn load_css() {
 }
 
 fn reload_css_provider(provider: &gtk::CssProvider) {
-    let gresource_path = "/org/gnome/BulkRenamerCosmic/style.css";
+    let gresource_path = "/com/chrisdaggas/BulkRenamer/style.css";
     
     if gio::resources_lookup_data(gresource_path, gio::ResourceLookupFlags::NONE).is_ok() {
         provider.load_from_resource(gresource_path);

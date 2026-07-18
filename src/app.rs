@@ -135,7 +135,7 @@ impl RenamerApplication {
         let app = self.clone();
         about_action.connect_activate(move |_, _| {
             if let Some(window) = app.active_window() {
-                let about = crate::ui::create_about_dialog();
+                let about = crate::ui::dialogs::create_about_dialog();
                 about.set_transient_for(Some(&window));
                 about.present();
             }
