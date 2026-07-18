@@ -48,6 +48,11 @@
   </branding>
   <content_rating type="oars-1.1" />
   <releases>
+    <release version="1.1.0" date="2026-07-18">
+      <description>
+        <p>Major overhaul: all 13 rule types in the UI, rename history with per-batch undo, crash recovery, headless CLI, content-hash variables, natural sorting and filters, translations for 10 languages, and a fully responsive interface with background execution.</p>
+      </description>
+    </release>
     <release version="1.0.0" date="2026-07-18">
       <description>
         <p>Initial release of Bulk Renamer.</p>
