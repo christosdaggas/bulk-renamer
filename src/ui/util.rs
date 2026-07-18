@@ -29,14 +29,6 @@ pub(crate) fn get_icon_for_extension(ext: Option<&str>) -> &'static str {
     }
 }
 
-pub(crate) fn get_icon_for_filename(name: &str) -> &'static str {
-    std::path::Path::new(name)
-        .extension()
-        .and_then(|ext| ext.to_str())
-        .map(|ext| get_icon_for_extension(Some(ext)))
-        .unwrap_or("text-x-generic-symbolic")
-}
-
 pub(crate) fn format_size(size: u64) -> String {
     const KB: u64 = 1024;
     const MB: u64 = KB * 1024;

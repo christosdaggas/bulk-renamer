@@ -4,6 +4,7 @@
 
 pub mod csv_io;
 pub mod dialogs;
+pub mod file_item;
 pub mod menu;
 pub mod preferences_dialog;
 pub mod presets_dialog;

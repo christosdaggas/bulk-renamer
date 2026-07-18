@@ -5,7 +5,8 @@ use crate::core::types::ThemePreference;
 use crate::engine::{RenameEngine, RenameValidator};
 use crate::presets::Preset;
 use crate::undo::{RenameLogEntry, RenameLogger, UndoManager, UndoResult};
-use super::util::{format_size, get_icon_for_extension, get_icon_for_filename};
+use super::file_item::FileItem;
+use glib::closure;
 use async_channel;
 use libadwaita as adw;
 use adw::prelude::*;
@@ -23,13 +24,15 @@ mod imp {
 
     #[derive(Default)]
     pub struct RenamerWindow {
-        pub files: RefCell<Vec<FileEntry>>,
         pub previews: RefCell<Vec<RenamePreview>>,
         pub config: RefCell<RenameConfig>,
         pub target: RefCell<RenameTarget>,
         pub settings: RefCell<AppSettings>,
-        pub file_list: RefCell<Option<gtk::ListBox>>,
-        pub preview_list: RefCell<Option<gtk::ListBox>>,
+        pub store: RefCell<Option<gio::ListStore>>,
+        pub file_selection: RefCell<Option<gtk::MultiSelection>>,
+        pub file_list: RefCell<Option<gtk::ListView>>,
+        pub files_stack: RefCell<Option<gtk::Stack>>,
+        pub preview_filter: RefCell<Option<gtk::CustomFilter>>,
         pub rules_list: RefCell<Option<gtk::ListBox>>,
         pub files_count_label: RefCell<Option<gtk::Label>>,
         pub selected_count_label: RefCell<Option<gtk::Label>>,
@@ -52,7 +55,6 @@ mod imp {
     impl ApplicationWindowImpl for RenamerWindow {}
     impl AdwApplicationWindowImpl for RenamerWindow {}
 }
-
 glib::wrapper! {
     pub struct RenamerWindow(ObjectSubclass<imp::RenamerWindow>)
         @extends adw::ApplicationWindow, gtk::ApplicationWindow, gtk::Window, gtk::Widget,
@@ -253,50 +255,94 @@ impl RenamerWindow {
         status_box.append(&selected_count);
         panel.append(&status_box);
 
-        // Store labels for later updates
         self.imp().files_count_label.replace(Some(files_count));
         self.imp().selected_count_label.replace(Some(selected_count));
 
-        // File list with multi-selection
-        let scroll = gtk::ScrolledWindow::builder()
-            .vexpand(true)
-            .build();
+        // Virtualized file list over the shared FileItem store.
+        let store = gio::ListStore::new::<FileItem>();
+        let selection = gtk::MultiSelection::new(Some(store.clone()));
 
-        let file_list = gtk::ListBox::builder()
-            .selection_mode(gtk::SelectionMode::Multiple)
+        let factory = gtk::SignalListItemFactory::new();
+        factory.connect_setup(|_, list_item| {
+            let Some(list_item) = list_item.downcast_ref::<gtk::ListItem>() else {
+                return;
+            };
+            let row_box = gtk::Box::builder()
+                .orientation(gtk::Orientation::Horizontal)
+                .spacing(8)
+                .margin_start(8)
+                .margin_end(8)
+                .margin_top(6)
+                .margin_bottom(6)
+                .build();
+
+            let icon = gtk::Image::new();
+            icon.add_css_class("dim-label");
+            let name_label = gtk::Label::builder()
+                .xalign(0.0)
+                .hexpand(true)
+                .ellipsize(gtk::pango::EllipsizeMode::Middle)
+                .build();
+            let size_label = gtk::Label::builder()
+                .css_classes(vec!["dim-label", "caption"])
+                .build();
+
+            row_box.append(&icon);
+            row_box.append(&name_label);
+            row_box.append(&size_label);
+            list_item.set_child(Some(&row_box));
+
+            let item_expr = list_item.property_expression("item");
+            item_expr
+                .chain_property::<FileItem>("icon-name")
+                .bind(&icon, "icon-name", None::<&gtk::Widget>);
+            item_expr
+                .chain_property::<FileItem>("original-name")
+                .bind(&name_label, "label", None::<&gtk::Widget>);
+            item_expr
+                .chain_property::<FileItem>("size-text")
+                .bind(&size_label, "label", None::<&gtk::Widget>);
+        });
+
+        let file_list = gtk::ListView::builder()
+            .model(&selection)
+            .factory(&factory)
             .css_classes(vec!["navigation-sidebar"])
             .build();
 
-        // Enable keyboard multi-select with Ctrl/Shift
-        file_list.set_activate_on_single_click(false);
+        let scroll = gtk::ScrolledWindow::builder()
+            .vexpand(true)
+            .child(&file_list)
+            .build();
 
-        // Placeholder
+        // Empty state and list share a stack; refresh_file_count switches them.
         let placeholder = adw::StatusPage::builder()
             .icon_name("folder-documents-symbolic")
             .title("No Files")
             .description("Drop files here or click + to add")
+            .vexpand(true)
             .build();
         placeholder.add_css_class("compact");
-        file_list.set_placeholder(Some(&placeholder));
 
-        // Selection changed handler
-        file_list.connect_selected_rows_changed(clone!(
+        let stack = gtk::Stack::new();
+        stack.set_vexpand(true);
+        stack.add_named(&placeholder, Some("empty"));
+        stack.add_named(&scroll, Some("list"));
+        stack.set_visible_child_name("empty");
+        panel.append(&stack);
+
+        selection.connect_selection_changed(clone!(
             #[weak(rename_to = window)]
             self,
-            move |list| {
-                let count = list.selected_rows().len();
-                let label_ref = window.imp().selected_count_label.borrow();
-                if let Some(label) = label_ref.as_ref() {
-                    label.set_label(&format!("{} selected", count));
-                }
+            move |sel, _, _| {
+                window.update_selected_count(sel.selection().size() as usize);
             }
         ));
 
-        scroll.set_child(Some(&file_list));
-        panel.append(&scroll);
-
-        // Store file list reference
+        self.imp().store.replace(Some(store));
+        self.imp().file_selection.replace(Some(selection.clone()));
         self.imp().file_list.replace(Some(file_list.clone()));
+        self.imp().files_stack.replace(Some(stack));
 
         // Bottom action bar
         let action_bar = gtk::Box::builder()
@@ -351,9 +397,9 @@ impl RenamerWindow {
 
         select_all_btn.connect_clicked(clone!(
             #[weak]
-            file_list,
+            selection,
             move |_| {
-                file_list.select_all();
+                selection.select_all();
             }
         ));
 
@@ -384,6 +430,20 @@ impl RenamerWindow {
                 true
             }
         ));
+        // Highlight the whole panel while a drag hovers so the drop zone is visible.
+        let panel_weak = panel.downgrade();
+        drop_target.connect_enter(move |_, _, _| {
+            if let Some(panel) = panel_weak.upgrade() {
+                panel.add_css_class("drop-zone");
+            }
+            gdk4::DragAction::COPY
+        });
+        let panel_weak = panel.downgrade();
+        drop_target.connect_leave(move |_| {
+            if let Some(panel) = panel_weak.upgrade() {
+                panel.remove_css_class("drop-zone");
+            }
+        });
         file_list.add_controller(drop_target);
 
         panel.into()
@@ -552,7 +612,7 @@ impl RenamerWindow {
         header_box.append(&refresh_btn);
         panel.append(&header_box);
 
-        // Status/stats bar
+        // Stats bar
         let stats_box = gtk::Box::builder()
             .orientation(gtk::Orientation::Horizontal)
             .margin_start(12)
@@ -566,69 +626,121 @@ impl RenamerWindow {
             .css_classes(vec!["dim-label", "caption"])
             .build();
 
-        let conflicts_label = gtk::Label::builder()
-            .label("")
-            .css_classes(vec!["caption"])
-            .build();
-
         stats_box.append(&preview_count);
-        stats_box.append(&conflicts_label);
         panel.append(&stats_box);
 
         self.imp().preview_count_label.replace(Some(preview_count));
 
-        // Column headers
-        let headers = gtk::Box::builder()
-            .orientation(gtk::Orientation::Horizontal)
-            .margin_start(12)
-            .margin_end(12)
-            .margin_top(6)
-            .spacing(12)
-            .build();
+        // The preview is the same FileItem store seen through a filter; cells
+        // bind to item properties, so preview refreshes never rebuild widgets.
+        let store = self
+            .imp()
+            .store
+            .borrow()
+            .clone()
+            .expect("files panel builds the store before the preview panel");
 
-        let original_header = gtk::Label::builder()
-            .label("Original")
-            .xalign(0.0)
-            .hexpand(true)
-            .css_classes(vec!["dim-label", "caption"])
-            .build();
+        let window_weak = self.downgrade();
+        let filter = gtk::CustomFilter::new(move |obj| {
+            let Some(window) = window_weak.upgrade() else {
+                return true;
+            };
+            let Some(item) = obj.downcast_ref::<FileItem>() else {
+                return true;
+            };
+            window.imp().settings.borrow().show_unchanged_files
+                || item.status_code() != FileItem::STATUS_UNCHANGED
+        });
+        let filter_model = gtk::FilterListModel::new(Some(store), Some(filter.clone()));
+        self.imp().preview_filter.replace(Some(filter));
 
-        let new_header = gtk::Label::builder()
-            .label("New Name")
-            .xalign(0.0)
-            .hexpand(true)
-            .css_classes(vec!["dim-label", "caption"])
-            .build();
+        let selection_model = gtk::NoSelection::new(Some(filter_model));
+        let column_view = gtk::ColumnView::builder().model(&selection_model).build();
 
-        headers.append(&original_header);
-        headers.append(&new_header);
-        panel.append(&headers);
+        // Original column: file icon + name.
+        let original_factory = gtk::SignalListItemFactory::new();
+        original_factory.connect_setup(|_, list_item| {
+            let Some(list_item) = list_item.downcast_ref::<gtk::ListItem>() else {
+                return;
+            };
+            let row_box = gtk::Box::builder()
+                .orientation(gtk::Orientation::Horizontal)
+                .spacing(8)
+                .build();
+            let icon = gtk::Image::new();
+            icon.add_css_class("dim-label");
+            let label = gtk::Label::builder()
+                .xalign(0.0)
+                .ellipsize(gtk::pango::EllipsizeMode::Middle)
+                .build();
+            row_box.append(&icon);
+            row_box.append(&label);
+            list_item.set_child(Some(&row_box));
 
-        // Preview list
+            let item_expr = list_item.property_expression("item");
+            item_expr
+                .chain_property::<FileItem>("icon-name")
+                .bind(&icon, "icon-name", None::<&gtk::Widget>);
+            item_expr
+                .chain_property::<FileItem>("original-name")
+                .bind(&label, "label", None::<&gtk::Widget>);
+        });
+        let original_col = gtk::ColumnViewColumn::new(Some("Original"), Some(original_factory));
+        original_col.set_expand(true);
+        column_view.append_column(&original_col);
+
+        // New name column.
+        let new_factory = gtk::SignalListItemFactory::new();
+        new_factory.connect_setup(|_, list_item| {
+            let Some(list_item) = list_item.downcast_ref::<gtk::ListItem>() else {
+                return;
+            };
+            let label = gtk::Label::builder()
+                .xalign(0.0)
+                .ellipsize(gtk::pango::EllipsizeMode::Middle)
+                .build();
+            list_item.set_child(Some(&label));
+
+            let item_expr = list_item.property_expression("item");
+            item_expr
+                .chain_property::<FileItem>("new-name")
+                .bind(&label, "label", None::<&gtk::Widget>);
+        });
+        let new_col = gtk::ColumnViewColumn::new(Some("New Name"), Some(new_factory));
+        new_col.set_expand(true);
+        column_view.append_column(&new_col);
+
+        // Status column: colored status icon with the message as tooltip.
+        let status_factory = gtk::SignalListItemFactory::new();
+        status_factory.connect_setup(|_, list_item| {
+            let Some(list_item) = list_item.downcast_ref::<gtk::ListItem>() else {
+                return;
+            };
+            let icon = gtk::Image::new();
+            list_item.set_child(Some(&icon));
+
+            let item_expr = list_item.property_expression("item");
+            item_expr
+                .chain_property::<FileItem>("status-icon")
+                .bind(&icon, "icon-name", None::<&gtk::Widget>);
+            item_expr
+                .chain_property::<FileItem>("tooltip")
+                .bind(&icon, "tooltip-text", None::<&gtk::Widget>);
+            item_expr
+                .chain_property::<FileItem>("status-css")
+                .chain_closure::<Vec<String>>(closure!(
+                    |_: Option<glib::Object>, css: String| vec![css]
+                ))
+                .bind(&icon, "css-classes", None::<&gtk::Widget>);
+        });
+        let status_col = gtk::ColumnViewColumn::new(None, Some(status_factory));
+        column_view.append_column(&status_col);
+
         let scroll = gtk::ScrolledWindow::builder()
             .vexpand(true)
+            .child(&column_view)
             .build();
-
-        let preview_list = gtk::ListBox::builder()
-            .selection_mode(gtk::SelectionMode::None)
-            .css_classes(vec!["boxed-list"])
-            .margin_start(12)
-            .margin_end(12)
-            .margin_top(6)
-            .margin_bottom(12)
-            .build();
-
-        preview_list.set_placeholder(Some(&gtk::Label::builder()
-            .label("Add files and rules to see preview")
-            .css_classes(vec!["dim-label"])
-            .margin_top(48)
-            .margin_bottom(48)
-            .build()));
-
-        scroll.set_child(Some(&preview_list));
         panel.append(&scroll);
-
-        self.imp().preview_list.replace(Some(preview_list));
 
         // Refresh button handler
         refresh_btn.connect_clicked(clone!(
@@ -908,7 +1020,7 @@ impl RenamerWindow {
     }
 
     /// Add several paths in a single pass. Plain files are collected and appended
-    /// once, so the list and preview are rebuilt one time instead of per path.
+    /// once, so the list and preview are refreshed one time instead of per path.
     pub fn add_paths(&self, paths: Vec<PathBuf>) {
         let mut entries = Vec::new();
 
@@ -967,109 +1079,92 @@ impl RenamerWindow {
         }
     }
 
-    /// Append file entries to the list (called from async context)
+    /// Append file entries to the list model in one splice (called from async context)
     fn append_file_entries(&self, entries: Vec<FileEntry>) {
-        let mut files = self.imp().files.borrow_mut();
-        files.extend(entries);
-        drop(files);
-        self.refresh_file_list();
+        {
+            let store_ref = self.imp().store.borrow();
+            let Some(store) = store_ref.as_ref() else {
+                return;
+            };
+            let items: Vec<FileItem> = entries.into_iter().map(FileItem::new).collect();
+            store.splice(store.n_items(), 0, &items);
+        }
+        self.refresh_file_count();
         self.update_preview();
     }
 
     pub fn clear_files(&self) {
-        self.imp().files.borrow_mut().clear();
+        if let Some(store) = self.imp().store.borrow().as_ref() {
+            store.remove_all();
+        }
         self.imp().previews.borrow_mut().clear();
-        self.refresh_file_list();
+        self.refresh_file_count();
         self.update_preview();
     }
 
     fn remove_selected_files(&self) {
-        if let Some(file_list) = self.imp().file_list.borrow().as_ref() {
-            let selected = file_list.selected_rows();
-            let indices: Vec<i32> = selected.iter().map(|row| row.index()).collect();
-
-            let mut files = self.imp().files.borrow_mut();
-            // Remove in reverse order to maintain indices
-            for idx in indices.into_iter().rev() {
-                if (idx as usize) < files.len() {
-                    files.remove(idx as usize);
-                }
-            }
+        let Some(selection) = self.imp().file_selection.borrow().clone() else {
+            return;
+        };
+        let Some(store) = self.imp().store.borrow().clone() else {
+            return;
+        };
+        let bitset = selection.selection();
+        let mut indices = Vec::new();
+        if let Some((iter, first)) = gtk::BitsetIter::init_first(&bitset) {
+            indices.push(first);
+            indices.extend(iter);
         }
-        self.refresh_file_list();
+        for idx in indices.into_iter().rev() {
+            store.remove(idx);
+        }
+        self.refresh_file_count();
         self.update_preview();
     }
 
-    fn refresh_file_list(&self) {
-        let files = self.imp().files.borrow();
-        
-        // Update count label
-        if let Some(label) = self.imp().files_count_label.borrow().as_ref() {
-            label.set_label(&format!("{} files", files.len()));
-        }
-
-        // Clear and rebuild file list
-        if let Some(list) = self.imp().file_list.borrow().as_ref() {
-            // Remove all children
-            while let Some(child) = list.first_child() {
-                list.remove(&child);
-            }
-
-            // Add file rows
-            for entry in files.iter() {
-                let row = self.create_file_row(entry);
-                list.append(&row);
-            }
+    /// Every FileItem currently in the list model.
+    fn file_items(&self) -> Vec<FileItem> {
+        match self.imp().store.borrow().as_ref() {
+            Some(store) => (0..store.n_items())
+                .filter_map(|i| store.item(i).and_downcast::<FileItem>())
+                .collect(),
+            None => Vec::new(),
         }
     }
 
-    fn create_file_row(&self, entry: &FileEntry) -> gtk::ListBoxRow {
-        let row = gtk::ListBoxRow::new();
-        
-        let box_ = gtk::Box::builder()
-            .orientation(gtk::Orientation::Horizontal)
-            .spacing(8)
-            .margin_start(8)
-            .margin_end(8)
-            .margin_top(6)
-            .margin_bottom(6)
-            .build();
+    /// Snapshot of the file entries behind the list model.
+    pub(crate) fn file_entries(&self) -> Vec<FileEntry> {
+        self.file_items().iter().map(|item| item.entry()).collect()
+    }
 
-        // Icon
-        let icon_name = if entry.is_directory {
-            "folder-symbolic"
-        } else {
-            get_icon_for_extension(entry.extension.as_deref())
-        };
-        let icon = gtk::Image::from_icon_name(icon_name);
-        icon.add_css_class("dim-label");
+    fn refresh_file_count(&self) {
+        let count = self.imp().store.borrow().as_ref().map_or(0, |s| s.n_items());
+        if let Some(label) = self.imp().files_count_label.borrow().as_ref() {
+            label.set_label(&format!("{} files", count));
+        }
+        if let Some(stack) = self.imp().files_stack.borrow().as_ref() {
+            stack.set_visible_child_name(if count == 0 { "empty" } else { "list" });
+        }
+        let selected = self
+            .imp()
+            .file_selection
+            .borrow()
+            .as_ref()
+            .map_or(0, |sel| sel.selection().size() as usize);
+        self.update_selected_count(selected);
+    }
 
-        // File name
-        let name_label = gtk::Label::builder()
-            .label(&entry.original_name)
-            .xalign(0.0)
-            .hexpand(true)
-            .ellipsize(gtk::pango::EllipsizeMode::Middle)
-            .build();
-
-        // Size
-        let size_label = gtk::Label::builder()
-            .label(&format_size(entry.size))
-            .css_classes(vec!["dim-label", "caption"])
-            .build();
-
-        box_.append(&icon);
-        box_.append(&name_label);
-        box_.append(&size_label);
-        
-        row.set_child(Some(&box_));
-        row
+    fn update_selected_count(&self, count: usize) {
+        if let Some(label) = self.imp().selected_count_label.borrow().as_ref() {
+            label.set_label(&format!("{} selected", count));
+        }
     }
 
     // ============ Preview ============
 
     pub fn update_preview(&self) {
-        let files = self.imp().files.borrow();
+        let items = self.file_items();
+        let files: Vec<FileEntry> = items.iter().map(|item| item.entry()).collect();
         let config = self.imp().config.borrow().clone();
 
         let mut engine = RenameEngine::new(config);
@@ -1115,61 +1210,16 @@ impl RenamerWindow {
             button.set_sensitive(will_rename > 0 && conflicts == 0 && errors == 0);
         }
 
-        // Update preview list
-        if let Some(list) = self.imp().preview_list.borrow().as_ref() {
-            while let Some(child) = list.first_child() {
-                list.remove(&child);
-            }
-
-            let settings = self.imp().settings.borrow();
-            for preview in &previews {
-                if !settings.show_unchanged_files && matches!(preview.status, RenameStatus::Unchanged) {
-                    continue;
-                }
-                let row = self.create_preview_row(preview);
-                list.append(&row);
-            }
+        // Push results into the bound item properties; the views update in place.
+        for (item, preview) in items.iter().zip(previews.iter()) {
+            item.apply_preview(preview);
         }
 
-        drop(files);
         self.imp().previews.replace(previews);
-    }
 
-    fn create_preview_row(&self, preview: &RenamePreview) -> adw::ActionRow {
-        let row = adw::ActionRow::builder()
-            .title(&preview.original_name)
-            .build();
-
-        let file_icon = gtk::Image::from_icon_name(get_icon_for_filename(&preview.original_name));
-        file_icon.add_css_class("dim-label");
-        row.add_prefix(&file_icon);
-
-        // Status icon based on preview status
-        let (icon_name, css_class) = match preview.status {
-            RenameStatus::WillRename => ("object-select-symbolic", "success"),
-            RenameStatus::Unchanged => ("action-unavailable-symbolic", "dim-label"),
-            RenameStatus::Error | RenameStatus::Failed => ("dialog-error-symbolic", "error"),
-            RenameStatus::Conflict | RenameStatus::InternalConflict => ("dialog-warning-symbolic", "warning"),
-            RenameStatus::Completed => ("object-select-symbolic", "success"),
-            RenameStatus::Skipped => ("action-unavailable-symbolic", "dim-label"),
-        };
-
-        let status_icon = gtk::Image::from_icon_name(icon_name);
-        status_icon.add_css_class(css_class);
-        row.add_suffix(&status_icon);
-
-        // Show new name if different from original
-        if preview.new_name != preview.original_name {
-            row.set_subtitle(&preview.new_name);
+        if let Some(filter) = self.imp().preview_filter.borrow().as_ref() {
+            filter.changed(gtk::FilterChange::Different);
         }
-        if let Some(message) = &preview.message {
-            row.set_tooltip_text(Some(message));
-            if preview.new_name == preview.original_name {
-                row.set_subtitle(message);
-            }
-        }
-
-        row
     }
 
     // ============ Rename Operations ============
@@ -1218,11 +1268,9 @@ impl RenamerWindow {
 
     fn perform_rename(&self) {
         let files: HashMap<Uuid, FileEntry> = self
-            .imp()
-            .files
-            .borrow()
-            .iter()
-            .map(|f| (f.id, f.clone()))
+            .file_entries()
+            .into_iter()
+            .map(|f| (f.id, f))
             .collect();
 
         let previews = self.imp().previews.borrow().clone();
@@ -1281,11 +1329,21 @@ impl RenamerWindow {
                 .iter()
                 .map(|record| &record.original_path)
                 .collect();
-            self.imp()
-                .files
-                .borrow_mut()
-                .retain(|entry| !renamed.contains(&entry.path));
-            self.refresh_file_list();
+            if let Some(store) = self.imp().store.borrow().as_ref() {
+                let mut idx = 0;
+                while idx < store.n_items() {
+                    let was_renamed = store
+                        .item(idx)
+                        .and_downcast::<FileItem>()
+                        .is_some_and(|item| renamed.contains(&item.entry().path));
+                    if was_renamed {
+                        store.remove(idx);
+                    } else {
+                        idx += 1;
+                    }
+                }
+            }
+            self.refresh_file_count();
         }
         self.update_preview();
     }
@@ -2072,7 +2130,7 @@ mod tests {
         }
 
         // Seed the list so the count label already has a value, then count how many
-        // times refresh_file_list rewrites it while adding the rest.
+        // times refresh_file_count rewrites it while adding the rest.
         window.add_path(dir.join("a.txt"));
         let label = window
             .imp()
@@ -2088,7 +2146,7 @@ mod tests {
 
         window.add_paths(vec![dir.join("b.txt"), dir.join("c.txt")]);
 
-        assert_eq!(window.imp().files.borrow().len(), 3);
+        assert_eq!(window.file_entries().len(), 3);
         assert_eq!(rebuilds.get(), 1, "two paths must cost one list rebuild");
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -2107,11 +2165,9 @@ mod tests {
 
         // Real pipeline: update_preview generated and validated the previews above.
         let files: HashMap<Uuid, FileEntry> = window
-            .imp()
-            .files
-            .borrow()
-            .iter()
-            .map(|entry| (entry.id, entry.clone()))
+            .file_entries()
+            .into_iter()
+            .map(|entry| (entry.id, entry))
             .collect();
         let previews = window.imp().previews.borrow().clone();
         let plan = crate::engine::plan_renames(&previews, &files).expect("batch plans cleanly");
@@ -2128,11 +2184,9 @@ mod tests {
         window.handle_rename_result(result);
 
         let remaining: Vec<PathBuf> = window
-            .imp()
-            .files
-            .borrow()
-            .iter()
-            .map(|entry| entry.path.clone())
+            .file_entries()
+            .into_iter()
+            .map(|entry| entry.path)
             .collect();
         assert_eq!(
             remaining,
