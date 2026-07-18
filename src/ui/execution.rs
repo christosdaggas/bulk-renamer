@@ -98,10 +98,12 @@ pub fn run_rename(
         async_channel::bounded::<crate::core::RenamerResult<RenameBatchResult>>(1);
 
     let worker_cancel = cancel.clone();
+    let journal_dir = crate::undo::default_data_dir();
     gio::spawn_blocking(move || {
         let result = crate::engine::execute_renames_with(
             &previews,
             &files,
+            Some(&journal_dir),
             move |done, total| {
                 let _ = progress_tx.send_blocking((done, total));
             },

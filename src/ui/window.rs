@@ -75,8 +75,58 @@ impl RenamerWindow {
         window.setup_ui();
         window.setup_actions();
         window.load_settings();
+        window.check_interrupted_renames();
 
         window
+    }
+
+    /// Offer to restore files an interrupted batch left under staging names.
+    fn check_interrupted_renames(&self) {
+        let data_dir = crate::undo::default_data_dir();
+        let count = crate::engine::pending_recovery_count(&data_dir);
+        if count == 0 {
+            return;
+        }
+
+        let dialog = adw::MessageDialog::new(
+            Some(self),
+            Some("Interrupted Rename Detected"),
+            Some(&format!(
+                "A previous rename was interrupted and left {} file(s) under temporary names. \
+                 Restore them to their original names now?",
+                count
+            )),
+        );
+        dialog.add_response("later", "Later");
+        dialog.add_response("recover", "Restore");
+        dialog.set_response_appearance("recover", adw::ResponseAppearance::Suggested);
+        dialog.set_default_response(Some("recover"));
+
+        dialog.connect_response(None, clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |dialog, response| {
+                if response == "recover" {
+                    let outcome =
+                        crate::engine::recover_interrupted(&crate::undo::default_data_dir());
+                    let mut message = format!("Restored {} file(s).", outcome.restored.len());
+                    for (path, reason) in outcome.failed.iter().take(5) {
+                        message.push_str(&format!("\n\n{}: {}", path.display(), reason));
+                    }
+                    if outcome.failed.len() > 5 {
+                        message.push_str(&format!("\n\n…and {} more.", outcome.failed.len() - 5));
+                    }
+                    let title = if outcome.failed.is_empty() {
+                        "Recovery Complete"
+                    } else {
+                        "Recovery Incomplete"
+                    };
+                    window.show_info_dialog(title, &message);
+                }
+                dialog.close();
+            }
+        ));
+        dialog.present();
     }
 
     fn setup_ui(&self) {

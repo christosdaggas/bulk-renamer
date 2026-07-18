@@ -292,12 +292,16 @@ impl RenameEngine {
             .map(|p| p.join(&name))
             .unwrap_or_else(|| PathBuf::from(&name));
 
-        // Determine status
+        // Determine status. A target that "exists" is not a conflict when it is
+        // this entry itself reached under different casing (case-insensitive
+        // filesystems): the two-phase executor vacates the source first, so a
+        // case-only rename is safe.
         let status = if name == entry.original_name {
             RenameStatus::Unchanged
         } else if new_path.exists()
             && new_path != entry.path
             && !batch_originals.contains(&new_path)
+            && !paths_are_same_file(&new_path, &entry.path)
         {
             RenameStatus::Conflict
         } else {
@@ -1051,13 +1055,13 @@ fn format_file_size(size: u64) -> String {
 
 /// A planned rename operation. Every item is first moved to a temporary path,
 /// then moved from the temporary path to its final destination.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct RenamePlan {
     pub items: Vec<RenamePlanItem>,
     pub skipped: Vec<Uuid>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct RenamePlanItem {
     pub file_id: Uuid,
     pub original_path: PathBuf,
@@ -1323,6 +1327,34 @@ fn path_is_occupied(path: &Path) -> bool {
     std::fs::symlink_metadata(path).is_ok()
 }
 
+/// Whether two paths name the same filesystem object right now.
+///
+/// On a case-insensitive mount (vfat/exFAT USB sticks, NTFS, CIFS, ext4
+/// casefold directories) the target of a case-only rename "exists" because it
+/// is the source itself under different casing; comparing device and inode
+/// numbers detects that without guessing filesystem semantics. Hardlinked
+/// siblings also compare equal, so a rename onto a hardlink of the source is
+/// previewed as fine and only refused at execution, where phase 2's occupancy
+/// check unwinds the batch — a late failure, never an overwrite.
+pub(crate) fn paths_are_same_file(a: &Path, b: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        match (std::fs::symlink_metadata(a), std::fs::symlink_metadata(b)) {
+            (Ok(meta_a), Ok(meta_b)) => {
+                meta_a.dev() == meta_b.dev() && meta_a.ino() == meta_b.ino()
+            }
+            _ => false,
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        // Windows filesystems are case-insensitive by default; case-folded
+        // path equality is the practical equivalent.
+        a.to_string_lossy().to_lowercase() == b.to_string_lossy().to_lowercase()
+    }
+}
+
 /// Take back a phase 2 that could not be finished, and report what would not move.
 ///
 /// Everything already moved goes back to its staging path before anything goes home:
@@ -1408,15 +1440,158 @@ pub fn execute_renames(
     Ok(execute_rename_plan(plan))
 }
 
-/// Plan and execute with progress reporting and cooperative cancellation.
+/// Plan and execute with progress reporting, cooperative cancellation, and an
+/// optional crash-recovery journal.
+///
+/// Between the two phases every file in the batch sits under a hidden staging
+/// name; a crash or power loss there would strand the whole batch with no
+/// record of what maps where. Writing the plan to `journal_dir` before phase 1
+/// and deleting it after a clean finish lets `recover_interrupted` put
+/// stranded files back on the next start.
 pub fn execute_renames_with(
     previews: &[RenamePreview],
     files: &HashMap<Uuid, FileEntry>,
+    journal_dir: Option<&Path>,
     progress: impl Fn(usize, usize),
     cancel: &std::sync::atomic::AtomicBool,
 ) -> RenamerResult<RenameBatchResult> {
     let plan = plan_renames(previews, files)?;
-    Ok(execute_rename_plan_with(plan, progress, cancel))
+    let journal = journal_dir.and_then(|dir| match RecoveryJournal::write(dir, &plan) {
+        Ok(journal) => Some(journal),
+        Err(err) => {
+            tracing::warn!("Could not write the crash-recovery journal: {}", err);
+            None
+        }
+    });
+    let result = execute_rename_plan_with(plan, progress, cancel);
+    if let Some(journal) = journal {
+        journal.finish(&result);
+    }
+    Ok(result)
+}
+
+/// Marker used in failure messages for files left under a staging name; a
+/// journal whose batch reports one is kept for later recovery.
+const STRANDED_MARKER: &str = "file left at";
+
+/// On-disk record of a batch's rename plan, written before phase 1 begins and
+/// removed once every file is either renamed or restored.
+pub struct RecoveryJournal {
+    path: PathBuf,
+}
+
+impl RecoveryJournal {
+    /// Journal file prefix inside the data directory.
+    const PREFIX: &'static str = "recovery-";
+
+    pub fn write(dir: &Path, plan: &RenamePlan) -> RenamerResult<Self> {
+        std::fs::create_dir_all(dir)?;
+        let path = dir.join(format!("{}{}.json", Self::PREFIX, Uuid::new_v4()));
+        let tmp = dir.join(format!("{}{}.json.tmp", Self::PREFIX, Uuid::new_v4()));
+        std::fs::write(&tmp, serde_json::to_vec(plan)?)?;
+        std::fs::rename(&tmp, &path)?;
+        Ok(Self { path })
+    }
+
+    /// Remove the journal unless the batch left files under staging names.
+    pub fn finish(self, result: &RenameBatchResult) {
+        let stranded = result
+            .failures
+            .iter()
+            .any(|failure| failure.error.contains(STRANDED_MARKER));
+        if !stranded {
+            let _ = std::fs::remove_file(&self.path);
+        }
+    }
+}
+
+/// How many files interrupted runs have left under staging names.
+pub fn pending_recovery_count(dir: &Path) -> usize {
+    read_journals(dir)
+        .iter()
+        .flat_map(|(_, plan)| plan.items.iter())
+        .filter(|item| path_is_occupied(&item.temp_path))
+        .count()
+}
+
+/// Result of restoring stranded staging files.
+#[derive(Debug, Default)]
+pub struct RecoveryOutcome {
+    /// Files moved back to their original paths.
+    pub restored: Vec<PathBuf>,
+    /// Files that could not be restored, with the reason.
+    pub failed: Vec<(PathBuf, String)>,
+}
+
+/// Put files stranded by an interrupted batch back on their original paths.
+///
+/// An item whose staging path no longer exists was either finished (phase 2
+/// moved it to its new name) or already restored; both are left alone. A
+/// journal is removed once none of its staging paths remain.
+pub fn recover_interrupted(dir: &Path) -> RecoveryOutcome {
+    let mut outcome = RecoveryOutcome::default();
+
+    for (journal_path, plan) in read_journals(dir) {
+        let mut remaining = false;
+        for item in &plan.items {
+            if !path_is_occupied(&item.temp_path) {
+                continue;
+            }
+            if path_is_occupied(&item.original_path) {
+                remaining = true;
+                outcome.failed.push((
+                    item.original_path.clone(),
+                    format!(
+                        "'{}' is occupied; the file is still at '{}'",
+                        item.original_path.display(),
+                        item.temp_path.display()
+                    ),
+                ));
+                continue;
+            }
+            match std::fs::rename(&item.temp_path, &item.original_path) {
+                Ok(()) => outcome.restored.push(item.original_path.clone()),
+                Err(err) => {
+                    remaining = true;
+                    outcome.failed.push((
+                        item.original_path.clone(),
+                        format!(
+                            "could not restore from '{}': {}",
+                            item.temp_path.display(),
+                            err
+                        ),
+                    ));
+                }
+            }
+        }
+        if !remaining {
+            let _ = std::fs::remove_file(&journal_path);
+        }
+    }
+
+    outcome
+}
+
+fn read_journals(dir: &Path) -> Vec<(PathBuf, RenamePlan)> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    entries
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| {
+                    name.starts_with(RecoveryJournal::PREFIX) && name.ends_with(".json")
+                })
+        })
+        .filter_map(|path| {
+            let bytes = std::fs::read(&path).ok()?;
+            let plan = serde_json::from_slice::<RenamePlan>(&bytes).ok()?;
+            Some((path, plan))
+        })
+        .collect()
 }
 
 /// Filename limit (in bytes) of the common Linux filesystems.
@@ -2516,6 +2691,159 @@ mod rename_safety_tests {
         assert!(plan_renames(&previews, &files).is_err());
         fs::remove_dir_all(dir).ok();
     }
+
+    #[test]
+    fn a_clean_batch_leaves_no_recovery_journal() {
+        let dir = temp_dir("journal-clean");
+        let journal_dir = dir.join("journal");
+        let file = write_file(&dir, "a.txt", "data");
+
+        let entry = FileEntry::from_path(file, 0).expect("entry");
+        let preview = RenamePreview {
+            file_id: entry.id,
+            original_name: entry.original_name.clone(),
+            new_name: "b.txt".to_string(),
+            new_path: dir.join("b.txt"),
+            status: RenameStatus::WillRename,
+            message: None,
+        };
+        let files: HashMap<Uuid, FileEntry> = std::iter::once((entry.id, entry)).collect();
+
+        let result = execute_renames_with(
+            std::slice::from_ref(&preview),
+            &files,
+            Some(&journal_dir),
+            |_, _| {},
+            &std::sync::atomic::AtomicBool::new(false),
+        )
+        .expect("plan executes");
+
+        assert_eq!(result.success_count(), 1);
+        assert!(dir.join("b.txt").exists());
+        assert_eq!(
+            pending_recovery_count(&journal_dir),
+            0,
+            "a finished batch must not look like it needs recovery"
+        );
+        let leftovers: Vec<_> = std::fs::read_dir(&journal_dir)
+            .map(|entries| entries.filter_map(|e| e.ok()).collect())
+            .unwrap_or_default();
+        assert!(leftovers.is_empty(), "journal must be deleted after a clean run");
+
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn recovery_restores_files_stranded_under_staging_names() {
+        let dir = temp_dir("journal-recover");
+        let journal_dir = dir.join("journal");
+
+        // Simulate a crash between the phases: the file sits at its staging
+        // path, the original is vacated, and the journal records the mapping.
+        let original = dir.join("photo.jpg");
+        let temp = dir.join(".bulk-renamer-stage-test");
+        fs::write(&temp, "pixels").expect("staged file");
+
+        let plan = RenamePlan {
+            items: vec![RenamePlanItem {
+                file_id: Uuid::new_v4(),
+                original_path: original.clone(),
+                temp_path: temp.clone(),
+                new_path: dir.join("renamed.jpg"),
+                was_directory: false,
+            }],
+            skipped: Vec::new(),
+        };
+        RecoveryJournal::write(&journal_dir, &plan).expect("journal written");
+        assert_eq!(pending_recovery_count(&journal_dir), 1);
+
+        let outcome = recover_interrupted(&journal_dir);
+
+        assert_eq!(outcome.restored, vec![original.clone()]);
+        assert!(outcome.failed.is_empty());
+        assert!(original.exists(), "the stranded file is back on its original path");
+        assert!(!temp.exists());
+        assert_eq!(pending_recovery_count(&journal_dir), 0, "journal removed once resolved");
+
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn recovery_refuses_to_overwrite_an_occupied_original() {
+        let dir = temp_dir("journal-occupied");
+        let journal_dir = dir.join("journal");
+
+        let original = write_file(&dir, "doc.txt", "someone else");
+        let temp = dir.join(".bulk-renamer-stage-occupied");
+        fs::write(&temp, "stranded").expect("staged file");
+
+        let plan = RenamePlan {
+            items: vec![RenamePlanItem {
+                file_id: Uuid::new_v4(),
+                original_path: original.clone(),
+                temp_path: temp.clone(),
+                new_path: dir.join("renamed.txt"),
+                was_directory: false,
+            }],
+            skipped: Vec::new(),
+        };
+        RecoveryJournal::write(&journal_dir, &plan).expect("journal written");
+
+        let outcome = recover_interrupted(&journal_dir);
+
+        assert!(outcome.restored.is_empty());
+        assert_eq!(outcome.failed.len(), 1);
+        assert!(temp.exists(), "the stranded file must not be destroyed");
+        assert_eq!(
+            fs::read_to_string(&original).expect("original readable"),
+            "someone else",
+            "the occupying file must not be overwritten"
+        );
+        assert_eq!(
+            pending_recovery_count(&journal_dir),
+            1,
+            "an unresolved journal is kept for a later attempt"
+        );
+
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn a_case_only_rename_of_the_same_file_is_not_a_conflict() {
+        let dir = temp_dir("case-only");
+        let file = write_file(&dir, "photo.jpg", "pixels");
+
+        // Hardlink the source so the target path names the same inode, which is
+        // exactly what a case-insensitive filesystem reports for Photo.jpg.
+        let target = dir.join("PHOTO.jpg");
+        fs::hard_link(&file, &target).expect("hard link");
+
+        assert!(paths_are_same_file(&file, &target));
+        assert!(!paths_are_same_file(&file, &dir.join("other.jpg")));
+
+        let entry = FileEntry::from_path(file, 0).expect("entry");
+        let config = RenameConfig {
+            rules: vec![RenameRule::new(RuleType::Replace(ReplaceRule {
+                find: "photo".to_string(),
+                replace: "PHOTO".to_string(),
+                ..Default::default()
+            }))],
+            ..Default::default()
+        };
+        let mut engine = RenameEngine::new(config);
+        let previews = engine.generate_previews(std::slice::from_ref(&entry));
+
+        assert_eq!(previews.len(), 1);
+        assert!(
+            matches!(previews[0].status, RenameStatus::WillRename),
+            "a target that is the source itself under another name must not              block the rename, got {:?} ({:?})",
+            previews[0].status,
+            previews[0].message
+        );
+
+        fs::remove_dir_all(dir).ok();
+    }
 }
+
 
 

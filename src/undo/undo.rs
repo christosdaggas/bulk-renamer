@@ -748,13 +748,16 @@ fn shell_escape(s: &str) -> String {
 
 impl Default for UndoManager {
     fn default() -> Self {
-        let data_dir = dirs::data_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("bulk-renamer")
-            .join("undo");
-
-        Self::new(data_dir, true)
+        Self::new(default_data_dir(), true)
     }
+}
+
+/// The application's undo/journal data directory.
+pub fn default_data_dir() -> PathBuf {
+    dirs::data_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("bulk-renamer")
+        .join("undo")
 }
 
 #[cfg(test)]

@@ -304,7 +304,13 @@ impl RenameValidator {
             let new_path_key = self.path_key(&preview.new_path, &mut dirs);
             let own_source = files
                 .and_then(|files| files.get(&preview.file_id))
-                .map(|entry| self.path_key(&entry.path, &mut dirs) == new_path_key)
+                .map(|entry| {
+                    self.path_key(&entry.path, &mut dirs) == new_path_key
+                        // Device/inode comparison catches case-only renames on
+                        // case-insensitive mounts reachable from a
+                        // case-sensitive OS, where path keys alone differ.
+                        || super::engine::paths_are_same_file(&entry.path, &preview.new_path)
+                })
                 .unwrap_or(false);
 
             if preview.new_path.exists()
