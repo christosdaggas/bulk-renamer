@@ -36,7 +36,7 @@ Thumbs.db
 
 # Debug files
 *.log
-core
+/core
 vgcore.*
 
 # Package manager directories

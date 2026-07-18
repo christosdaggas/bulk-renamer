@@ -13,8 +13,8 @@ use crate::engine::validator::RenameValidator;
 use crate::expression::ExpressionEngine;
 use chrono::Local;
 use regex::Regex;
-use std::collections::HashMap;
-use std::path::PathBuf;
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
 /// The main rename engine that processes files and applies rules.
@@ -29,6 +29,15 @@ pub struct RenameEngine {
     clipboard_content: Option<String>,
     /// Rename target type.
     target: RenameTarget,
+}
+
+/// An enabled rule with everything that only has to be built once per preview pass.
+struct PreparedRule {
+    /// Identity of the originating rule, so counter state stays per rule.
+    id: Uuid,
+    rule_type: RuleType,
+    /// Pattern for the rule types that use one.
+    regex: Option<Regex>,
 }
 
 impl RenameEngine {
@@ -62,17 +71,70 @@ impl RenameEngine {
     /// Reset counter state.
     pub fn reset_counters(&mut self) {
         self.counter_state.clear();
+        self.expression_engine.reset_counter();
     }
 
     /// Generate rename previews for a list of files.
     pub fn generate_previews(&mut self, files: &[FileEntry]) -> Vec<RenamePreview> {
         self.reset_counters();
-        
+
         let filtered_files = self.apply_filter(files);
-        
+        self.expression_engine.set_total(filtered_files.len() as i64);
+
+        let prepared = match self.prepare_rules() {
+            Ok(prepared) => prepared,
+            Err(err) => {
+                return filtered_files
+                    .iter()
+                    .map(|entry| error_preview(entry, &err))
+                    .collect();
+            }
+        };
+
+        // A destination that lands on another batch member's original path is not a
+        // conflict: the two-phase executor vacates every source before any final move,
+        // which is what makes swaps and rotations work.
+        let batch_originals: HashSet<PathBuf> = filtered_files
+            .iter()
+            .map(|entry| entry.path.clone())
+            .collect();
+
         filtered_files
             .iter()
-            .map(|entry| self.generate_preview(entry))
+            .map(|entry| {
+                let preview = self.build_preview(entry, &prepared, &batch_originals);
+                // ${index} identifies the file, so it advances once per file rather than
+                // once per expression that reads it.
+                self.expression_engine.next_counter();
+                preview
+            })
+            .collect()
+    }
+
+    /// Compile the enabled rules once for a whole preview pass.
+    fn prepare_rules(&self) -> RenamerResult<Vec<PreparedRule>> {
+        self.config
+            .rules
+            .iter()
+            .filter(|rule| rule.enabled)
+            .map(|rule| {
+                let regex = match &rule.rule_type {
+                    RuleType::Replace(replace) if replace.use_regex => {
+                        Some(compile_pattern(&replace.find, replace.case_sensitive)?)
+                    }
+                    RuleType::Remove(remove) => match &remove.target {
+                        RemoveTarget::Pattern(pattern) => Some(Regex::new(pattern)?),
+                        _ => None,
+                    },
+                    _ => None,
+                };
+
+                Ok(PreparedRule {
+                    id: rule.id,
+                    rule_type: rule.rule_type.clone(),
+                    regex,
+                })
+            })
             .collect()
     }
 
@@ -188,33 +250,31 @@ impl RenameEngine {
 
     /// Generate a preview for a single file.
     pub fn generate_preview(&mut self, entry: &FileEntry) -> RenamePreview {
+        match self.prepare_rules() {
+            // A single file is its own batch, so nothing else can vacate a destination.
+            Ok(prepared) => self.build_preview(entry, &prepared, &HashSet::new()),
+            Err(err) => error_preview(entry, &err),
+        }
+    }
+
+    /// Generate a preview using rules already prepared for this pass.
+    fn build_preview(
+        &mut self,
+        entry: &FileEntry,
+        rules: &[PreparedRule],
+        batch_originals: &HashSet<PathBuf>,
+    ) -> RenamePreview {
         let mut name = if self.config.separate_extension {
             entry.stem()
         } else {
             entry.original_name.clone()
         };
 
-        // Clone the rules to avoid borrow issues
-        let rules: Vec<_> = self.config.rules.clone();
-
-        // Apply each enabled rule in order
-        for rule in &rules {
-            if !rule.enabled {
-                continue;
-            }
-
-            match self.apply_rule(&name, entry, &rule.rule_type) {
+        // Apply each rule in order
+        for rule in rules {
+            match self.apply_rule(&name, entry, rule) {
                 Ok(new_name) => name = new_name,
-                Err(e) => {
-                    return RenamePreview {
-                        file_id: entry.id,
-                        original_name: entry.original_name.clone(),
-                        new_name: entry.original_name.clone(),
-                        new_path: entry.path.clone(),
-                        status: RenameStatus::Error,
-                        message: Some(e.to_string()),
-                    };
-                }
+                Err(e) => return error_preview(entry, &e),
             }
         }
 
@@ -235,7 +295,10 @@ impl RenameEngine {
         // Determine status
         let status = if name == entry.original_name {
             RenameStatus::Unchanged
-        } else if new_path.exists() && new_path != entry.path {
+        } else if new_path.exists()
+            && new_path != entry.path
+            && !batch_originals.contains(&new_path)
+        {
             RenameStatus::Conflict
         } else {
             RenameStatus::WillRename
@@ -256,33 +319,36 @@ impl RenameEngine {
         &mut self,
         name: &str,
         entry: &FileEntry,
-        rule_type: &RuleType,
+        rule: &PreparedRule,
     ) -> RenamerResult<String> {
-        match rule_type {
-            RuleType::Replace(rule) => self.apply_replace(name, rule),
-            RuleType::Insert(rule) => self.apply_insert(name, entry, rule),
-            RuleType::Remove(rule) => self.apply_remove(name, rule),
-            RuleType::ChangeCase(rule) => self.apply_case_change(name, rule),
-            RuleType::Numbering(rule) => self.apply_numbering(name, entry, rule),
-            RuleType::Trim(rule) => self.apply_trim(name, rule),
-            RuleType::Pad(rule) => self.apply_pad(name, rule),
-            RuleType::Expression(rule) => self.apply_expression(name, entry, rule),
-            RuleType::Rearrange(rule) => self.apply_rearrange(name, rule),
-            RuleType::DateTime(rule) => self.apply_datetime(name, entry, rule),
-            RuleType::Metadata(rule) => self.apply_metadata(name, entry, rule),
-            RuleType::Cleanup(rule) => self.apply_cleanup(name, rule),
-            RuleType::Transliterate(rule) => self.apply_transliterate(name, rule),
+        match &rule.rule_type {
+            RuleType::Replace(cfg) => self.apply_replace(name, cfg, rule.regex.as_ref()),
+            RuleType::Insert(cfg) => self.apply_insert(name, entry, cfg, rule.id),
+            RuleType::Remove(cfg) => self.apply_remove(name, cfg, rule.regex.as_ref()),
+            RuleType::ChangeCase(cfg) => self.apply_case_change(name, cfg),
+            RuleType::Numbering(cfg) => self.apply_numbering(name, entry, cfg, rule.id),
+            RuleType::Trim(cfg) => self.apply_trim(name, cfg),
+            RuleType::Pad(cfg) => self.apply_pad(name, cfg),
+            RuleType::Expression(cfg) => self.apply_expression(name, entry, cfg),
+            RuleType::Rearrange(cfg) => self.apply_rearrange(name, cfg),
+            RuleType::DateTime(cfg) => self.apply_datetime(name, entry, cfg),
+            RuleType::Metadata(cfg) => self.apply_metadata(name, entry, cfg),
+            RuleType::Cleanup(cfg) => self.apply_cleanup(name, cfg),
+            RuleType::Transliterate(cfg) => self.apply_transliterate(name, cfg),
         }
     }
 
     /// Apply replace rule.
-    fn apply_replace(&self, name: &str, rule: &ReplaceRule) -> RenamerResult<String> {
+    fn apply_replace(
+        &self,
+        name: &str,
+        rule: &ReplaceRule,
+        regex: Option<&Regex>,
+    ) -> RenamerResult<String> {
         if rule.use_regex {
-            let regex_pattern = if rule.case_sensitive {
-                Regex::new(&rule.find)?
-            } else {
-                Regex::new(&format!("(?i){}", rule.find))?
-            };
+            let regex_pattern = regex.ok_or_else(|| {
+                RenamerError::Internal("Regex rule was not prepared".to_string())
+            })?;
 
             let result = if rule.replace_all {
                 regex_pattern.replace_all(name, &rule.replace).to_string()
@@ -299,13 +365,9 @@ impl RenameEngine {
                     name.replacen(&rule.find, &rule.replace, 1)
                 }
             } else {
-                // Case-insensitive replace
-                let pattern = Regex::new(&format!("(?i){}", regex::escape(&rule.find)))?;
-                if rule.replace_all {
-                    pattern.replace_all(name, &rule.replace).to_string()
-                } else {
-                    pattern.replace(name, &rule.replace).to_string()
-                }
+                // A literal replace has no regex syntax to honour, and routing it through
+                // the regex engine cost two orders of magnitude for nothing.
+                replace_ignore_case(name, &rule.find, &rule.replace, rule.replace_all)
             };
 
             Ok(result)
@@ -318,6 +380,7 @@ impl RenameEngine {
         name: &str,
         entry: &FileEntry,
         rule: &InsertRule,
+        rule_id: Uuid,
     ) -> RenamerResult<String> {
         // Determine what to insert
         let insert_text = match &rule.text {
@@ -347,12 +410,10 @@ impl RenameEngine {
                     .unwrap_or_default()
             }
             InsertText::Counter(config) => {
-                let key = if config.start == 1 {
-                    "default".to_string()
-                } else {
-                    format!("counter_{}", config.start)
-                };
-                let counter = self.counter_state.entry(key).or_insert(config.start);
+                let counter = self
+                    .counter_state
+                    .entry(counter_key(rule_id, None))
+                    .or_insert(config.start);
                 let result = format_number(*counter, config.format, config.padding);
                 *counter += config.increment;
                 result
@@ -430,19 +491,25 @@ impl RenameEngine {
     }
 
     /// Apply remove rule.
-    fn apply_remove(&self, name: &str, rule: &RemoveRule) -> RenamerResult<String> {
+    fn apply_remove(
+        &self,
+        name: &str,
+        rule: &RemoveRule,
+        regex: Option<&Regex>,
+    ) -> RenamerResult<String> {
         let result = match &rule.target {
             RemoveTarget::Text { text, case_sensitive } => {
                 if *case_sensitive {
                     name.replace(text, "")
                 } else {
-                    let pattern = Regex::new(&format!("(?i){}", regex::escape(text)))?;
-                    pattern.replace_all(name, "").to_string()
+                    replace_ignore_case(name, text, "", true)
                 }
             }
-            RemoveTarget::Pattern(pattern) => {
-                let regex = Regex::new(pattern)?;
-                regex.replace_all(name, "").to_string()
+            RemoveTarget::Pattern(_) => {
+                let pattern = regex.ok_or_else(|| {
+                    RenamerError::Internal("Regex rule was not prepared".to_string())
+                })?;
+                pattern.replace_all(name, "").to_string()
             }
             RemoveTarget::Range { start, end } => remove_range(name, *start, *end),
             RemoveTarget::FirstN(n) => {
@@ -545,17 +612,18 @@ impl RenameEngine {
         name: &str,
         entry: &FileEntry,
         rule: &NumberingRule,
+        rule_id: Uuid,
     ) -> RenamerResult<String> {
-        let key = if rule.reset_per_folder {
-            entry
-                .parent_name
-                .clone()
-                .unwrap_or_else(|| "root".to_string())
+        let scope = if rule.reset_per_folder {
+            Some(entry.parent_name.as_deref().unwrap_or("root"))
         } else {
-            "global".to_string()
+            None
         };
 
-        let counter = self.counter_state.entry(key).or_insert(rule.start);
+        let counter = self
+            .counter_state
+            .entry(counter_key(rule_id, scope))
+            .or_insert(rule.start);
         let number_str = format!(
             "{}{}{}",
             rule.prefix,
@@ -873,6 +941,97 @@ impl RenameEngine {
     }
 }
 
+/// Compile a user pattern, honouring the rule's case sensitivity.
+fn compile_pattern(pattern: &str, case_sensitive: bool) -> RenamerResult<Regex> {
+    let regex = if case_sensitive {
+        Regex::new(pattern)?
+    } else {
+        Regex::new(&format!("(?i){}", pattern))?
+    };
+
+    Ok(regex)
+}
+
+/// Key for a rule's counter state. Two numbering rules in one configuration each keep
+/// their own sequence, and `reset_per_folder` splits a rule's sequence by folder.
+fn counter_key(rule_id: Uuid, scope: Option<&str>) -> String {
+    match scope {
+        Some(scope) => format!("{}:{}", rule_id, scope),
+        None => format!("{}:global", rule_id),
+    }
+}
+
+/// Build the preview shown when a rule cannot be applied to a file.
+fn error_preview(entry: &FileEntry, error: &RenamerError) -> RenamePreview {
+    RenamePreview {
+        file_id: entry.id,
+        original_name: entry.original_name.clone(),
+        new_name: entry.original_name.clone(),
+        new_path: entry.path.clone(),
+        status: RenameStatus::Error,
+        message: Some(error.to_string()),
+    }
+}
+
+/// Replace literal occurrences of `needle`, ignoring case.
+fn replace_ignore_case(haystack: &str, needle: &str, replacement: &str, all: bool) -> String {
+    if needle.is_empty() {
+        return haystack.to_string();
+    }
+
+    let mut result = String::with_capacity(haystack.len());
+    let mut cursor = 0;
+
+    while let Some((start, end)) = find_ignore_case(haystack, needle, cursor) {
+        result.push_str(&haystack[cursor..start]);
+        result.push_str(replacement);
+        cursor = end;
+
+        if !all {
+            break;
+        }
+    }
+
+    result.push_str(&haystack[cursor..]);
+    result
+}
+
+/// Byte range of the first case-insensitive match of `needle` at or after `from`.
+fn find_ignore_case(haystack: &str, needle: &str, from: usize) -> Option<(usize, usize)> {
+    let mut start = from;
+
+    while start <= haystack.len() {
+        let mut candidate = haystack[start..].chars();
+        let mut matched = 0;
+        let mut is_match = true;
+
+        for wanted in needle.chars() {
+            // Per-character simple folding, which is what `(?i)` gave us here before.
+            match candidate.next() {
+                Some(found) if found.to_lowercase().eq(wanted.to_lowercase()) => {
+                    matched += found.len_utf8();
+                }
+                _ => {
+                    is_match = false;
+                    break;
+                }
+            }
+        }
+
+        if is_match {
+            return Some((start, start + matched));
+        }
+
+        // Advance one character, so the scan always lands on a boundary.
+        match haystack[start..].chars().next() {
+            Some(c) => start += c.len_utf8(),
+            None => break,
+        }
+    }
+
+    None
+}
+
 /// Format file size in human-readable format.
 fn format_file_size(size: u64) -> String {
     const KB: u64 = 1024;
@@ -970,7 +1129,7 @@ pub fn plan_renames(
                 path: preview.new_path.clone(),
             })?;
 
-        let temp_path = unique_temp_path(entry);
+        let temp_path = unique_temp_path(&entry.path);
         items.push(RenamePlanItem {
             file_id: preview.file_id,
             original_path: entry.path.clone(),
@@ -980,7 +1139,47 @@ pub fn plan_renames(
         });
     }
 
+    reject_nested_items(&items)?;
+
     Ok(RenamePlan { items, skipped })
+}
+
+/// Refuse a batch that renames a directory together with anything inside it.
+///
+/// Every item stages next to the file it stands in for, so renaming the directory moves
+/// the staging paths of its contents too. The descendant's recorded temp path then no
+/// longer exists, its own move and its rollback both fail, and its file is left inside
+/// the renamed directory under a staging name. The final path is wrong as well: the
+/// preview builds it from the directory's old name. Neither is repairable here.
+fn reject_nested_items(items: &[RenamePlanItem]) -> RenamerResult<()> {
+    let directories: HashSet<&Path> = items
+        .iter()
+        .filter(|item| item.was_directory)
+        .map(|item| item.original_path.as_path())
+        .collect();
+
+    if directories.is_empty() {
+        return Ok(());
+    }
+
+    for item in items {
+        // `ancestors` starts at the path itself, which is this item's own entry.
+        if let Some(parent) = item
+            .original_path
+            .ancestors()
+            .skip(1)
+            .find(|ancestor| directories.contains(ancestor))
+        {
+            return Err(RenamerError::Internal(format!(
+                "'{}' and '{}' inside it cannot be renamed in the same batch; \
+                 rename the folder and its contents separately",
+                parent.display(),
+                item.original_path.display()
+            )));
+        }
+    }
+
+    Ok(())
 }
 
 /// Execute a prepared rename plan using two phases to avoid source/target swaps
@@ -1001,29 +1200,69 @@ pub fn execute_rename_plan(plan: RenamePlan) -> RenameBatchResult {
         }
     }
 
-    let mut successes = Vec::new();
-    for item in staged {
-        match std::fs::rename(&item.temp_path, &item.new_path) {
-            Ok(()) => successes.push(RenameRecord {
-                id: Uuid::new_v4(),
-                timestamp: Local::now(),
-                original_path: item.original_path,
-                new_path: item.new_path,
-                was_directory: item.was_directory,
-            }),
-            Err(err) => {
-                let rollback_error = std::fs::rename(&item.temp_path, &item.original_path)
-                    .err()
-                    .map(|rollback| format!("; rollback failed: {}", rollback))
-                    .unwrap_or_default();
+    // An item that failed to stage is still sitting on its original path, and that path
+    // may be the destination of an item that did stage. Finishing phase 2 would rename
+    // straight over it, so the batch is all-or-nothing.
+    if !failures.is_empty() {
+        for item in staged {
+            let rollback_error = restore_staged(&item);
+            if !rollback_error.is_empty() {
                 failures.push(RenameFailure {
                     file_id: item.file_id,
                     original_path: Some(item.original_path),
                     target_path: item.new_path,
-                    error: format!("{}{}", err, rollback_error),
+                    error: format!("batch aborted{}", rollback_error),
                 });
             }
         }
+
+        return RenameBatchResult {
+            batch: None,
+            successes: Vec::new(),
+            failures,
+            skipped: plan.skipped,
+        };
+    }
+
+    let mut successes = Vec::new();
+    for (index, item) in staged.iter().enumerate() {
+        // Phase 1 vacated every source in the batch, so anything occupying a destination
+        // now arrived from outside it. std::fs::rename replaces the destination silently,
+        // which would destroy a file nobody asked this batch to touch.
+        let moved = if path_is_occupied(&item.new_path) {
+            Err(format!("'{}' already exists", item.new_path.display()))
+        } else {
+            std::fs::rename(&item.temp_path, &item.new_path).map_err(|err| err.to_string())
+        };
+
+        if let Err(reason) = moved {
+            failures.push(RenameFailure {
+                file_id: item.file_id,
+                original_path: Some(item.original_path.clone()),
+                target_path: item.new_path.clone(),
+                error: reason,
+            });
+            // One member's destination is routinely another member's source, which is
+            // what the two phases exist for. A file that stops here therefore has
+            // nowhere safe to go back to while the finished moves stand, so phase 2 is
+            // all-or-nothing the same way phase 1 is.
+            failures.extend(unwind_phase_two(&staged, index));
+
+            return RenameBatchResult {
+                batch: None,
+                successes: Vec::new(),
+                failures,
+                skipped: plan.skipped,
+            };
+        }
+
+        successes.push(RenameRecord {
+            id: Uuid::new_v4(),
+            timestamp: Local::now(),
+            original_path: item.original_path.clone(),
+            new_path: item.new_path.clone(),
+            was_directory: item.was_directory,
+        });
     }
 
     let batch = if successes.is_empty() {
@@ -1040,6 +1279,88 @@ pub fn execute_rename_plan(plan: RenamePlan) -> RenameBatchResult {
     }
 }
 
+/// Whether anything at all sits at `path`. `Path::exists` follows symlinks and reports a
+/// dangling one as free, but renaming onto it still destroys the link.
+fn path_is_occupied(path: &Path) -> bool {
+    std::fs::symlink_metadata(path).is_ok()
+}
+
+/// Take back a phase 2 that could not be finished, and report what would not move.
+///
+/// Everything already moved goes back to its staging path before anything goes home:
+/// staging paths are unique and unused, so this cannot land one member of the batch on
+/// another, whereas moving a finished rename straight back to its original path would
+/// overwrite whichever member had been renamed into it.
+fn unwind_phase_two(staged: &[RenamePlanItem], failed_at: usize) -> Vec<RenameFailure> {
+    let mut failures = Vec::new();
+    let mut restorable = Vec::new();
+
+    for (index, item) in staged.iter().enumerate() {
+        if index >= failed_at {
+            // Never left staging: this item and everything queued behind it.
+            restorable.push(item);
+            continue;
+        }
+
+        match std::fs::rename(&item.new_path, &item.temp_path) {
+            Ok(()) => restorable.push(item),
+            Err(err) => failures.push(RenameFailure {
+                file_id: item.file_id,
+                original_path: Some(item.original_path.clone()),
+                target_path: item.new_path.clone(),
+                error: format!(
+                    "batch aborted and a finished rename could not be taken back, \
+                     file left at '{}': {}",
+                    item.new_path.display(),
+                    err
+                ),
+            }),
+        }
+    }
+
+    for item in restorable {
+        let rollback_error = restore_staged(item);
+        if !rollback_error.is_empty() {
+            failures.push(RenameFailure {
+                file_id: item.file_id,
+                original_path: Some(item.original_path.clone()),
+                target_path: item.new_path.clone(),
+                error: format!("batch aborted{}", rollback_error),
+            });
+        }
+    }
+
+    failures
+}
+
+/// Move a staged item back to the path it came from, and describe what went wrong when it
+/// could not be. Returns an empty string once the file is home again.
+fn restore_staged(item: &RenamePlanItem) -> String {
+    // A swap or rotation makes one item's original path another item's destination, so
+    // this path can still hold a finished rename that would not come back off it, or an
+    // entry that arrived from outside the batch. Putting the file back would overwrite
+    // it, which is the loss the rollback exists to prevent; leaving it staged keeps both
+    // files and says where this one is.
+    if path_is_occupied(&item.original_path) {
+        return format!(
+            "; rollback skipped because '{}' is occupied, file left at '{}'",
+            item.original_path.display(),
+            item.temp_path.display()
+        );
+    }
+
+    std::fs::rename(&item.temp_path, &item.original_path)
+        .err()
+        .map(|err| {
+            format!(
+                "; rollback failed, file left at '{}': {}",
+                item.temp_path.display(),
+                err
+            )
+        })
+        .unwrap_or_default()
+}
+
 /// Execute the actual rename operations.
 pub fn execute_renames(
     previews: &[RenamePreview],
@@ -1049,31 +1370,95 @@ pub fn execute_renames(
     Ok(execute_rename_plan(plan))
 }
 
-fn unique_temp_path(entry: &FileEntry) -> PathBuf {
-    let parent = entry.path.parent().map(PathBuf::from).unwrap_or_default();
-    let stem = entry
-        .path
+/// Filename limit (in bytes) of the common Linux filesystems.
+const MAX_TEMP_NAME_BYTES: usize = 255;
+
+/// Staging path for a two-phase move, next to the file it stands in for.
+///
+/// Also used by undo, which has to stage for the same reason the engine does.
+pub(crate) fn unique_temp_path(source: &Path) -> PathBuf {
+    let parent = source.parent().map(PathBuf::from).unwrap_or_default();
+    let stem = source
         .file_name()
         .map(|name| name.to_string_lossy())
         .unwrap_or_default();
 
     loop {
-        let candidate = parent.join(format!(".bulk-renamer-{}-{}", Uuid::new_v4(), stem));
+        let prefix = format!(".bulk-renamer-{}-", Uuid::new_v4());
+        // The uuid prefix can push an otherwise legal name past the filesystem's
+        // NAME_MAX, and a staging failure aborts the whole batch.
+        let budget = MAX_TEMP_NAME_BYTES.saturating_sub(prefix.len());
+        let candidate = parent.join(format!("{}{}", prefix, truncate_bytes(&stem, budget)));
         if !candidate.exists() {
             return candidate;
         }
     }
 }
 
+/// Truncate to at most `max_bytes`, never splitting a character.
+fn truncate_bytes(value: &str, max_bytes: usize) -> &str {
+    if value.len() <= max_bytes {
+        return value;
+    }
+
+    let mut end = max_bytes;
+    while end > 0 && !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    &value[..end]
+}
+
 #[cfg(test)]
 mod rename_safety_tests {
     use super::*;
+    use crate::core::{RenameRule, ValidationErrorType};
     use std::fs;
+    use std::path::Path;
 
     fn temp_dir(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("bulk-renamer-{}-{}", name, Uuid::new_v4()));
         fs::create_dir_all(&dir).expect("create temp dir");
         dir
+    }
+
+    fn write_file(dir: &Path, name: &str, contents: &str) -> PathBuf {
+        let path = dir.join(name);
+        fs::write(&path, contents).expect("write file");
+        path
+    }
+
+    fn entries(dir: &Path, names: &[&str]) -> Vec<FileEntry> {
+        names
+            .iter()
+            .map(|name| FileEntry::from_path(dir.join(name), 0).expect("file entry"))
+            .collect()
+    }
+
+    fn by_id(files: &[FileEntry]) -> HashMap<Uuid, FileEntry> {
+        files.iter().map(|entry| (entry.id, entry.clone())).collect()
+    }
+
+    fn config_with(rules: Vec<RuleType>) -> RenameConfig {
+        RenameConfig {
+            rules: rules.into_iter().map(RenameRule::new).collect(),
+            ..RenameConfig::default()
+        }
+    }
+
+    fn replace_rule(find: &str, replace: &str) -> RuleType {
+        RuleType::Replace(ReplaceRule {
+            find: find.to_string(),
+            replace: replace.to_string(),
+            ..ReplaceRule::default()
+        })
+    }
+
+    /// Run the real preview pass over `names` in `dir`.
+    fn preview(dir: &Path, names: &[&str], rules: Vec<RuleType>) -> (Vec<RenamePreview>, Vec<FileEntry>) {
+        let files = entries(dir, names);
+        let mut engine = RenameEngine::new(config_with(rules));
+        let previews = engine.generate_previews(&files);
+        (previews, files)
     }
 
     fn preview_for(entry: &FileEntry, new_name: &str) -> RenamePreview {
@@ -1126,6 +1511,944 @@ mod rename_safety_tests {
     }
 
     #[test]
+    fn two_name_cycle_survives_the_whole_pipeline() {
+        let dir = temp_dir("two-cycle");
+        write_file(&dir, "a.txt", "a");
+        write_file(&dir, "b.txt", "b");
+
+        // a -> b and b -> a, routed through a sentinel neither name contains.
+        let (previews, files) = preview(
+            &dir,
+            &["a.txt", "b.txt"],
+            vec![
+                replace_rule("a", "X"),
+                replace_rule("b", "a"),
+                replace_rule("X", "b"),
+            ],
+        );
+
+        assert!(
+            previews
+                .iter()
+                .all(|preview| preview.status == RenameStatus::WillRename),
+            "a swap is not a conflict: {:?}",
+            previews
+        );
+
+        let result = execute_renames(&previews, &by_id(&files)).expect("execute cycle");
+        assert_eq!(result.success_count(), 2);
+        assert_eq!(fs::read_to_string(dir.join("a.txt")).expect("read a"), "b");
+        assert_eq!(fs::read_to_string(dir.join("b.txt")).expect("read b"), "a");
+
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn three_name_cycle_survives_the_whole_pipeline() {
+        let dir = temp_dir("three-cycle");
+        write_file(&dir, "a.txt", "a");
+        write_file(&dir, "b.txt", "b");
+        write_file(&dir, "c.txt", "c");
+
+        // a -> b -> c -> a.
+        let (previews, files) = preview(
+            &dir,
+            &["a.txt", "b.txt", "c.txt"],
+            vec![
+                replace_rule("c", "X"),
+                replace_rule("b", "c"),
+                replace_rule("a", "b"),
+                replace_rule("X", "a"),
+            ],
+        );
+
+        assert!(
+            previews
+                .iter()
+                .all(|preview| preview.status == RenameStatus::WillRename),
+            "a rotation is not a conflict: {:?}",
+            previews
+        );
+
+        let result = execute_renames(&previews, &by_id(&files)).expect("execute cycle");
+        assert_eq!(result.success_count(), 3);
+        assert_eq!(fs::read_to_string(dir.join("a.txt")).expect("read a"), "c");
+        assert_eq!(fs::read_to_string(dir.join("b.txt")).expect("read b"), "a");
+        assert_eq!(fs::read_to_string(dir.join("c.txt")).expect("read c"), "b");
+
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn a_failed_stage_aborts_the_batch_instead_of_overwriting() {
+        let dir = temp_dir("stage-failure");
+        write_file(&dir, "a.txt", "a");
+        write_file(&dir, "b.txt", "b");
+
+        // a -> c and b -> a, so b's destination is a's original path.
+        let (previews, files) = preview(
+            &dir,
+            &["a.txt", "b.txt"],
+            vec![replace_rule("a", "c"), replace_rule("b", "a")],
+        );
+
+        let mut plan = plan_renames(&previews, &by_id(&files)).expect("plan");
+        // Stage a.txt into a directory that does not exist, the way a name over
+        // NAME_MAX or a file that vanished would fail.
+        for item in &mut plan.items {
+            if item.original_path == dir.join("a.txt") {
+                item.temp_path = dir.join("no-such-dir").join("staged");
+            }
+        }
+
+        let result = execute_rename_plan(plan);
+
+        assert_eq!(result.success_count(), 0);
+        assert!(!result.all_successful());
+        // a.txt kept its own contents rather than being overwritten by b.txt.
+        assert_eq!(fs::read_to_string(dir.join("a.txt")).expect("read a"), "a");
+        assert_eq!(fs::read_to_string(dir.join("b.txt")).expect("read b"), "b");
+        assert!(!dir.join("c.txt").exists());
+
+        fs::remove_dir_all(dir).ok();
+    }
+
+    /// Point one planned item at a destination that cannot be created, so its final
+    /// move fails the way a target directory that vanished mid-batch would.
+    fn break_final_move(plan: &mut RenamePlan, dir: &Path, original: &str) {
+        for item in &mut plan.items {
+            if item.original_path == dir.join(original) {
+                item.new_path = dir.join("no-such-dir").join("x");
+            }
+        }
+    }
+
+    #[test]
+    fn a_failed_final_move_does_not_overwrite_a_queued_source() {
+        let dir = temp_dir("final-move-before");
+        write_file(&dir, "keep", "keep");
+        write_file(&dir, "mover", "mover");
+
+        // mover -> keep is only allowed because the batch promised to vacate keep
+        // first, and keep is listed first so its own move is attempted first.
+        let (previews, files) = preview(
+            &dir,
+            &["keep", "mover"],
+            vec![replace_rule("keep", "renamed"), replace_rule("mover", "keep")],
+        );
+        assert!(
+            previews
+                .iter()
+                .all(|preview| preview.status == RenameStatus::WillRename),
+            "both moves were planned: {:?}",
+            previews
+        );
+
+        let mut plan = plan_renames(&previews, &by_id(&files)).expect("plan");
+        break_final_move(&mut plan, &dir, "keep");
+        let result = execute_rename_plan(plan);
+
+        // keep never reached a destination, so its contents must still be its own.
+        assert_eq!(
+            fs::read_to_string(dir.join("keep")).expect("read keep"),
+            "keep",
+            "a rolled back file was overwritten by another member of the batch: {:?}",
+            result.failures
+        );
+        assert_eq!(
+            fs::read_to_string(dir.join("mover")).expect("read mover"),
+            "mover"
+        );
+        assert_eq!(result.success_count(), 0);
+
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn a_failed_final_move_does_not_overwrite_a_completed_rename() {
+        let dir = temp_dir("final-move-after");
+        write_file(&dir, "keep", "keep");
+        write_file(&dir, "mover", "mover");
+
+        // Same pair, opposite order: mover -> keep lands first, and keep's own move
+        // then fails and is rolled back onto the file mover just became. Routed through
+        // a sentinel so the second rule does not rewrite mover's result.
+        let (previews, files) = preview(
+            &dir,
+            &["mover", "keep"],
+            vec![
+                replace_rule("keep", "SENTINEL"),
+                replace_rule("mover", "keep"),
+                replace_rule("SENTINEL", "renamed"),
+            ],
+        );
+
+        let mut plan = plan_renames(&previews, &by_id(&files)).expect("plan");
+        break_final_move(&mut plan, &dir, "keep");
+        let result = execute_rename_plan(plan);
+
+        // Both files are back under the names the user knows them by: neither destroyed
+        // by the rollback, nor stranded under a staging name it can never be found by.
+        assert_eq!(
+            fs::read_to_string(dir.join("keep")).expect("read keep"),
+            "keep",
+            "keep is not where the user left it, batch reported {} success(es): {:?}",
+            result.success_count(),
+            result.failures
+        );
+        assert_eq!(
+            fs::read_to_string(dir.join("mover")).expect("read mover"),
+            "mover",
+            "mover is not where the user left it, batch reported {} success(es): {:?}",
+            result.success_count(),
+            result.failures
+        );
+        // A batch that could not finish reports nothing to undo.
+        assert_eq!(result.success_count(), 0);
+        assert!(result.batch.is_none());
+        assert!(leftover_staging_files(&dir).is_empty());
+
+        fs::remove_dir_all(dir).ok();
+    }
+
+    /// Files abandoned under the hidden staging prefix. Their contents survive, but the
+    /// user cannot find them by any name they ever chose.
+    fn leftover_staging_files(dir: &Path) -> Vec<String> {
+        fs::read_dir(dir)
+            .expect("read dir")
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.starts_with(".bulk-renamer-"))
+            .collect()
+    }
+
+    #[test]
+    fn a_target_on_a_filtered_out_file_is_refused() {
+        let dir = temp_dir("filtered-out");
+        write_file(&dir, "keep.log", "keep");
+        write_file(&dir, "mover.txt", "mover");
+
+        // Only .txt files are in the batch, so keep.log is never vacated even though it
+        // sits in the queue the user handed over.
+        let files = entries(&dir, &["keep.log", "mover.txt"]);
+        let mut config = config_with(vec![replace_rule("mover.txt", "keep.log")]);
+        config.separate_extension = false;
+        config.filter = Some(FilterConfig {
+            mode: FilterMode::Include,
+            rules: vec![FilterRule {
+                field: FilterField::Extension,
+                operator: FilterOperator::Equals,
+                value: "txt".to_string(),
+            }],
+        });
+        let mut engine = RenameEngine::new(config);
+        let previews = engine.generate_previews(&files);
+
+        assert_eq!(previews.len(), 1, "only the .txt file is in the batch");
+        assert_eq!(previews[0].new_name, "keep.log");
+        assert_eq!(
+            previews[0].status,
+            RenameStatus::Conflict,
+            "a file outside the batch is not vacated by it"
+        );
+        assert!(execute_renames(&previews, &by_id(&files)).is_err());
+        assert_eq!(
+            fs::read_to_string(dir.join("keep.log")).expect("read keep"),
+            "keep"
+        );
+
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn a_target_on_an_unchanged_file_is_refused() {
+        let dir = temp_dir("unchanged-target");
+        write_file(&dir, "keep.txt", "keep");
+        write_file(&dir, "mover.txt", "mover");
+
+        // keep.txt is in the batch but its rules leave it alone, so nothing moves it out
+        // of the way of mover.txt.
+        let (previews, files) = preview(
+            &dir,
+            &["keep.txt", "mover.txt"],
+            vec![replace_rule("mover", "keep")],
+        );
+
+        let unchanged = previews
+            .iter()
+            .find(|preview| preview.original_name == "keep.txt")
+            .expect("keep preview");
+        assert_eq!(unchanged.status, RenameStatus::Unchanged);
+
+        assert!(
+            execute_renames(&previews, &by_id(&files)).is_err(),
+            "an unchanged file is not vacated and must not be renamed over"
+        );
+        assert_eq!(
+            fs::read_to_string(dir.join("keep.txt")).expect("read keep"),
+            "keep"
+        );
+        assert_eq!(
+            fs::read_to_string(dir.join("mover.txt")).expect("read mover"),
+            "mover"
+        );
+
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn four_name_cycle_survives_the_whole_pipeline() {
+        let dir = temp_dir("four-cycle");
+        for name in ["a.txt", "b.txt", "c.txt", "d.txt"] {
+            write_file(&dir, name, &name[..1]);
+        }
+
+        // a -> b -> c -> d -> a.
+        let (previews, files) = preview(
+            &dir,
+            &["a.txt", "b.txt", "c.txt", "d.txt"],
+            vec![
+                replace_rule("d", "X"),
+                replace_rule("c", "d"),
+                replace_rule("b", "c"),
+                replace_rule("a", "b"),
+                replace_rule("X", "a"),
+            ],
+        );
+
+        assert!(
+            previews
+                .iter()
+                .all(|preview| preview.status == RenameStatus::WillRename),
+            "a four way rotation is not a conflict: {:?}",
+            previews
+        );
+
+        let result = execute_renames(&previews, &by_id(&files)).expect("execute cycle");
+        assert_eq!(result.success_count(), 4);
+        assert_eq!(fs::read_to_string(dir.join("a.txt")).expect("read a"), "d");
+        assert_eq!(fs::read_to_string(dir.join("b.txt")).expect("read b"), "a");
+        assert_eq!(fs::read_to_string(dir.join("c.txt")).expect("read c"), "b");
+        assert_eq!(fs::read_to_string(dir.join("d.txt")).expect("read d"), "c");
+
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn a_cycle_with_an_invalid_member_moves_nothing() {
+        let dir = temp_dir("invalid-cycle");
+        write_file(&dir, "a.txt", "a");
+        write_file(&dir, "b.txt", "b");
+        write_file(&dir, "c.txt", "c");
+
+        // a -> b -> c -> a, except c's new name is empty and cannot be used. The other
+        // two are only safe because the whole rotation happens.
+        let files = entries(&dir, &["a.txt", "b.txt", "c.txt"]);
+        let mut config = config_with(vec![
+            replace_rule("c.txt", ""),
+            replace_rule("b.txt", "c.txt"),
+            replace_rule("a.txt", "b.txt"),
+        ]);
+        // An emptied stem would otherwise be rescued by the re-added extension.
+        config.separate_extension = false;
+        let mut engine = RenameEngine::new(config);
+        let previews = engine.generate_previews(&files);
+
+        assert!(
+            execute_renames(&previews, &by_id(&files)).is_err(),
+            "one unusable member must fail the whole rotation: {:?}",
+            previews
+        );
+        assert_eq!(fs::read_to_string(dir.join("a.txt")).expect("read a"), "a");
+        assert_eq!(fs::read_to_string(dir.join("b.txt")).expect("read b"), "b");
+        assert_eq!(fs::read_to_string(dir.join("c.txt")).expect("read c"), "c");
+        assert!(leftover_staging_files(&dir).is_empty());
+
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn the_same_source_queued_twice_keeps_the_file() {
+        let dir = temp_dir("duplicate-source");
+        write_file(&dir, "a.txt", "a");
+
+        // The same path added to the queue twice, each copy given its own number, so the
+        // two entries claim different destinations and neither is an internal conflict.
+        let entry = FileEntry::from_path(dir.join("a.txt"), 0).expect("entry");
+        let mut twin = FileEntry::from_path(dir.join("a.txt"), 0).expect("twin");
+        twin.id = Uuid::new_v4();
+        let files = vec![entry, twin];
+
+        let mut engine = RenameEngine::new(config_with(vec![RuleType::Numbering(
+            NumberingRule {
+                start: 1,
+                padding: 0,
+                prefix: "-".to_string(),
+                ..NumberingRule::default()
+            },
+        )]));
+        let previews = engine.generate_previews(&files);
+        assert_eq!(previews.len(), 2);
+        assert_ne!(previews[0].new_path, previews[1].new_path);
+
+        let result = execute_renames(&previews, &by_id(&files)).expect("execute");
+
+        // Whatever the batch decides, the one real file on disk still exists and still
+        // holds its contents under exactly one name.
+        let surviving: Vec<PathBuf> = ["a.txt", "a-1.txt", "a-2.txt"]
+            .iter()
+            .map(|name| dir.join(name))
+            .filter(|path| path.exists())
+            .collect();
+        assert_eq!(
+            surviving.len(),
+            1,
+            "one file went in, so one file comes out: {:?}, failures {:?}",
+            surviving,
+            result.failures
+        );
+        assert_eq!(
+            fs::read_to_string(&surviving[0]).expect("read survivor"),
+            "a"
+        );
+        assert!(leftover_staging_files(&dir).is_empty());
+
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn staging_keeps_a_long_name_within_the_filename_limit() {
+        let dir = temp_dir("long-name");
+        // Legal on ext4, but no room is left for the staging prefix.
+        let original = format!("{}.txt", "n".repeat(250));
+        write_file(&dir, &original, "long");
+
+        let (previews, files) = preview(
+            &dir,
+            &[&original],
+            vec![RuleType::Remove(RemoveRule {
+                target: RemoveTarget::FirstN(1),
+            })],
+        );
+
+        let result = execute_renames(&previews, &by_id(&files)).expect("execute");
+        assert_eq!(
+            result.success_count(),
+            1,
+            "staging failed: {:?}",
+            result.failures
+        );
+        assert!(dir.join(format!("{}.txt", "n".repeat(249))).exists());
+
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    // Needs a case-sensitive filesystem to mean anything.
+    #[cfg(target_os = "linux")]
+    fn targets_differing_only_in_case_are_not_a_conflict() {
+        let dir = temp_dir("case-distinct");
+        write_file(&dir, "one.txt", "one");
+        write_file(&dir, "two.txt", "two");
+
+        let (previews, files) = preview(
+            &dir,
+            &["one.txt", "two.txt"],
+            vec![replace_rule("one", "A"), replace_rule("two", "a")],
+        );
+
+        let result = execute_renames(&previews, &by_id(&files)).expect("execute");
+        assert_eq!(result.success_count(), 2);
+        assert_eq!(fs::read_to_string(dir.join("A.txt")).expect("read A"), "one");
+        assert_eq!(fs::read_to_string(dir.join("a.txt")).expect("read a"), "two");
+
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    // Needs a case-sensitive filesystem to mean anything.
+    #[cfg(target_os = "linux")]
+    fn a_file_that_only_folds_onto_a_queued_source_is_not_overwritten() {
+        let dir = temp_dir("case-collision");
+        write_file(&dir, "A.txt", "A");
+        write_file(&dir, "keep.txt", "keep");
+
+        // A.txt -> B.txt and keep.txt -> a.txt.
+        let (previews, files) = preview(
+            &dir,
+            &["A.txt", "keep.txt"],
+            vec![replace_rule("A", "B"), replace_rule("keep", "a")],
+        );
+
+        // An unrelated a.txt appears between preview and execution, which is what the
+        // pre-execution exists check is there to catch. Only a case-folded comparison
+        // mistakes it for the queued A.txt.
+        write_file(&dir, "a.txt", "unrelated");
+
+        assert!(execute_renames(&previews, &by_id(&files)).is_err());
+        assert_eq!(
+            fs::read_to_string(dir.join("a.txt")).expect("read a"),
+            "unrelated"
+        );
+
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_symlinked_parent_does_not_hide_a_collision() {
+        let root = temp_dir("symlinked-parent");
+        let real = root.join("real");
+        fs::create_dir_all(&real).expect("create real dir");
+        let link = root.join("link");
+        std::os::unix::fs::symlink(&real, &link).expect("symlink");
+
+        write_file(&real, "keep.txt", "keep");
+        write_file(&real, "other.txt", "other");
+
+        // One directory, queued under both of its names, the way adding a folder and a
+        // symlink to it does. Both files are real/keep.txt and real/other.txt.
+        let files = vec![
+            FileEntry::from_path(real.join("keep.txt"), 0).expect("entry keep"),
+            FileEntry::from_path(link.join("other.txt"), 0).expect("entry other"),
+        ];
+        let mut engine = RenameEngine::new(config_with(vec![
+            replace_rule("keep", "merged"),
+            replace_rule("other", "merged"),
+        ]));
+        let previews = engine.generate_previews(&files);
+
+        // Both land on real/merged.txt, so this must never execute.
+        let result = execute_renames(&previews, &by_id(&files));
+        assert!(
+            result.is_err(),
+            "two files renamed onto one path were allowed to run: {:?}",
+            result.map(|batch| batch.success_count())
+        );
+        assert_eq!(
+            fs::read_to_string(real.join("keep.txt")).expect("read keep"),
+            "keep"
+        );
+        assert_eq!(
+            fs::read_to_string(real.join("other.txt")).expect("read other"),
+            "other"
+        );
+
+        fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn a_parent_component_in_a_name_does_not_hide_a_collision() {
+        let root = temp_dir("parent-component");
+        let sub = root.join("sub");
+        fs::create_dir_all(&sub).expect("create sub dir");
+        write_file(&sub, "a.txt", "a");
+        write_file(&root, "b.txt", "b");
+
+        // sub/a.txt -> sub/../out.txt and b.txt -> out.txt are the same destination
+        // spelled two ways.
+        let files = vec![
+            FileEntry::from_path(sub.join("a.txt"), 0).expect("entry a"),
+            FileEntry::from_path(root.join("b.txt"), 0).expect("entry b"),
+        ];
+        let mut engine = RenameEngine::new(config_with(vec![
+            replace_rule("a", "../out"),
+            replace_rule("b", "out"),
+        ]));
+        let previews = engine.generate_previews(&files);
+
+        let result = execute_renames(&previews, &by_id(&files));
+        assert!(
+            result.is_err(),
+            "two files renamed onto one path were allowed to run: {:?}",
+            result.map(|batch| batch.success_count())
+        );
+        assert_eq!(fs::read_to_string(sub.join("a.txt")).expect("read a"), "a");
+        assert_eq!(fs::read_to_string(root.join("b.txt")).expect("read b"), "b");
+
+        fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn two_numbering_rules_keep_separate_counters() {
+        let dir = temp_dir("numbering");
+        write_file(&dir, "f1.txt", "");
+        write_file(&dir, "f2.txt", "");
+        write_file(&dir, "f3.txt", "");
+
+        let numbering = |start: i64, prefix: &str| {
+            RuleType::Numbering(NumberingRule {
+                start,
+                padding: 0,
+                prefix: prefix.to_string(),
+                ..NumberingRule::default()
+            })
+        };
+
+        let (previews, files) = preview(
+            &dir,
+            &["f1.txt", "f2.txt", "f3.txt"],
+            vec![numbering(1, "-a"), numbering(100, "-b")],
+        );
+
+        let names: Vec<&str> = previews
+            .iter()
+            .map(|preview| preview.new_name.as_str())
+            .collect();
+        assert_eq!(
+            names,
+            ["f1-a1-b100.txt", "f2-a2-b101.txt", "f3-a3-b102.txt"]
+        );
+
+        let result = execute_renames(&previews, &by_id(&files)).expect("execute");
+        assert_eq!(result.success_count(), 3);
+
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn expression_counters_advance_once_per_file() {
+        let dir = temp_dir("expression-counter");
+        write_file(&dir, "x.txt", "");
+        write_file(&dir, "y.txt", "");
+        write_file(&dir, "z.txt", "");
+
+        let names = ["x.txt", "y.txt", "z.txt"];
+        let files = entries(&dir, &names);
+        let mut engine = RenameEngine::new(config_with(vec![RuleType::Expression(
+            ExpressionRule {
+                expression: "${name}-${index}-of-${total}".to_string(),
+            },
+        )]));
+
+        let previews = engine.generate_previews(&files);
+        let new_names: Vec<&str> = previews
+            .iter()
+            .map(|preview| preview.new_name.as_str())
+            .collect();
+        assert_eq!(new_names, ["x-1-of-3.txt", "y-2-of-3.txt", "z-3-of-3.txt"]);
+
+        // A second pass restarts rather than continuing from the first.
+        let previews = engine.generate_previews(&files);
+        assert_eq!(previews[0].new_name, "x-1-of-3.txt");
+
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn one_name_windows_would_reject_does_not_block_the_batch() {
+        let dir = temp_dir("colon");
+        write_file(&dir, "meeting.txt", "meeting");
+        write_file(&dir, "notes.txt", "notes");
+
+        let (previews, files) = preview(
+            &dir,
+            &["meeting.txt", "notes.txt"],
+            vec![
+                replace_rule("meeting", "12:30 meeting"),
+                replace_rule("notes", "notes-ok"),
+            ],
+        );
+
+        let result = execute_renames(&previews, &by_id(&files)).expect("execute");
+        assert_eq!(result.success_count(), 2);
+        assert!(dir.join("12:30 meeting.txt").exists());
+        assert!(dir.join("notes-ok.txt").exists());
+
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn a_marked_internal_conflict_does_not_block_the_rest_of_the_batch() {
+        let dir = temp_dir("internal-conflict");
+        write_file(&dir, "a1.txt", "a1");
+        write_file(&dir, "a2.txt", "a2");
+        write_file(&dir, "solo.txt", "solo");
+
+        // a1 and a2 both collapse onto "same"; solo is independent.
+        let (mut previews, files) = preview(
+            &dir,
+            &["a1.txt", "a2.txt", "solo.txt"],
+            vec![
+                replace_rule("a1", "same"),
+                replace_rule("a2", "same"),
+                replace_rule("solo", "alone"),
+            ],
+        );
+        let files_by_id = by_id(&files);
+
+        // The window marks conflicts on the previews it validated, and the executor
+        // then validates those same previews a second time.
+        let validator = RenameValidator::new();
+        for error in validator.validate_batch_with_files(&previews, &files_by_id) {
+            if let Some(preview) = previews.get_mut(error.file_index) {
+                preview.status = match error.error_type {
+                    ValidationErrorType::Conflict => RenameStatus::InternalConflict,
+                    _ => RenameStatus::Error,
+                };
+            }
+        }
+
+        let result = execute_renames(&previews, &files_by_id).expect("execute");
+        assert_eq!(result.success_count(), 1);
+        assert!(dir.join("alone.txt").exists());
+        assert!(dir.join("a1.txt").exists());
+        assert!(dir.join("a2.txt").exists());
+
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn literal_case_insensitive_replace_matches_the_regex_behaviour() {
+        let dir = temp_dir("literal-ci");
+        write_file(&dir, "Ärger a.A.txt", "");
+
+        let (previews, _) = preview(
+            &dir,
+            &["Ärger a.A.txt"],
+            vec![RuleType::Replace(ReplaceRule {
+                find: "a".to_string(),
+                replace: "-".to_string(),
+                case_sensitive: false,
+                ..ReplaceRule::default()
+            })],
+        );
+
+        // '.' and 'Ä' are literal, both cases of 'a' match, and the extension is
+        // untouched because it is processed separately.
+        assert_eq!(previews[0].new_name, "Ärger -.-.txt");
+
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    #[ignore = "performance measurement; run with --ignored --nocapture"]
+    fn bench_preview_over_10k_files() {
+        let dir = temp_dir("bench");
+        let files: Vec<FileEntry> = (0..10_000)
+            .map(|i| {
+                let name = format!("IMG_{:05}.jpg", i);
+                FileEntry {
+                    id: Uuid::new_v4(),
+                    path: dir.join(&name),
+                    original_name: name,
+                    extension: Some("jpg".to_string()),
+                    is_directory: false,
+                    size: 0,
+                    modified: None,
+                    created: None,
+                    accessed: None,
+                    depth: 0,
+                    parent_name: None,
+                    metadata_cache: None,
+                }
+            })
+            .collect();
+
+        let mut regex_engine = RenameEngine::new(config_with(vec![RuleType::Replace(
+            ReplaceRule {
+                find: r"IMG_(\d+)".to_string(),
+                replace: "Photo-$1".to_string(),
+                use_regex: true,
+                ..ReplaceRule::default()
+            },
+        )]));
+        let start = std::time::Instant::now();
+        let previews = regex_engine.generate_previews(&files);
+        let regex_elapsed = start.elapsed();
+        assert_eq!(previews[0].new_name, "Photo-00000.jpg");
+
+        let mut literal_engine = RenameEngine::new(config_with(vec![RuleType::Replace(
+            ReplaceRule {
+                find: "img".to_string(),
+                replace: "Photo".to_string(),
+                case_sensitive: false,
+                ..ReplaceRule::default()
+            },
+        )]));
+        let start = std::time::Instant::now();
+        let previews = literal_engine.generate_previews(&files);
+        let literal_elapsed = start.elapsed();
+        assert_eq!(previews[0].new_name, "Photo_00000.jpg");
+
+        println!("10k files, regex replace:              {:?}", regex_elapsed);
+        println!("10k files, case-insensitive literal:   {:?}", literal_elapsed);
+
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn a_stage_failure_on_the_last_item_still_puts_the_first_one_back() {
+        let dir = temp_dir("stage-failure-last");
+        write_file(&dir, "a.txt", "AAA");
+        write_file(&dir, "b.txt", "BBB");
+
+        // a -> c and b -> a, so the item that fails to stage is the one whose
+        // destination is the path the staged item has to be put back on.
+        let (previews, files) = preview(
+            &dir,
+            &["a.txt", "b.txt"],
+            vec![
+                replace_rule("a", "X"),
+                replace_rule("b", "a"),
+                replace_rule("X", "c"),
+            ],
+        );
+
+        let mut plan = plan_renames(&previews, &by_id(&files)).expect("plan");
+        for item in &mut plan.items {
+            if item.original_path == dir.join("b.txt") {
+                item.temp_path = dir.join("no-such-dir").join("staged");
+            }
+        }
+
+        let result = execute_rename_plan(plan);
+
+        assert_eq!(result.success_count(), 0, "{:?}", result.successes);
+        assert_eq!(fs::read_to_string(dir.join("a.txt")).expect("read a"), "AAA");
+        assert_eq!(fs::read_to_string(dir.join("b.txt")).expect("read b"), "BBB");
+        assert!(!dir.join("c.txt").exists());
+
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_dangling_symlink_on_a_destination_is_not_written_over() {
+        let dir = temp_dir("dangling-target");
+        write_file(&dir, "a.txt", "AAA");
+        // A link to something not mounted yet. `exists` follows it and calls the name
+        // free, so nothing before the final move has any reason to stop.
+        std::os::unix::fs::symlink(dir.join("elsewhere"), dir.join("c.txt")).expect("symlink");
+
+        let (previews, files) = preview(&dir, &["a.txt"], vec![replace_rule("a", "c")]);
+        let plan = plan_renames(&previews, &by_id(&files)).expect("plan");
+        let result = execute_rename_plan(plan);
+
+        assert_eq!(result.success_count(), 0, "{:?}", result.successes);
+        assert_eq!(fs::read_to_string(dir.join("a.txt")).expect("read a"), "AAA");
+        assert!(
+            fs::symlink_metadata(dir.join("c.txt"))
+                .expect("stat c")
+                .file_type()
+                .is_symlink(),
+            "the link was replaced by the renamed file"
+        );
+
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn a_rolled_back_file_is_not_eaten_by_the_next_rename() {
+        let dir = temp_dir("rollback-into-pending");
+        write_file(&dir, "a.txt", "AAA");
+        write_file(&dir, "b.txt", "BBB");
+
+        // a -> c and b -> a, so b's destination is the path a rolls back to.
+        let (previews, files) = preview(
+            &dir,
+            &["a.txt", "b.txt"],
+            vec![
+                replace_rule("a", "X"),
+                replace_rule("b", "a"),
+                replace_rule("X", "c"),
+            ],
+        );
+
+        let plan = plan_renames(&previews, &by_id(&files)).expect("plan");
+        // Validation has passed and phase 2 is about to run. A directory arriving on a
+        // destination is one of the ways a move fails there, and it is the failure that
+        // sends a.txt back to its original path with b.txt still queued behind it.
+        fs::create_dir(dir.join("c.txt")).expect("create obstacle");
+
+        let result = execute_rename_plan(plan);
+
+        assert_eq!(result.success_count(), 0, "{:?}", result.failures);
+        // Both files still hold their own contents. Putting a.txt back must not turn it
+        // into a target for b.txt, which is a silent overwrite of a file the batch has
+        // just reported it could not rename.
+        assert_eq!(fs::read_to_string(dir.join("a.txt")).expect("read a"), "AAA");
+        assert_eq!(fs::read_to_string(dir.join("b.txt")).expect("read b"), "BBB");
+
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn a_rollback_does_not_overwrite_a_rename_the_batch_already_completed() {
+        let dir = temp_dir("rollback-over-success");
+        write_file(&dir, "a.txt", "AAA");
+        write_file(&dir, "b.txt", "BBB");
+
+        // a -> b and b -> c, so a lands on the path b would roll back to.
+        let (previews, files) = preview(
+            &dir,
+            &["a.txt", "b.txt"],
+            vec![
+                replace_rule("b", "X"),
+                replace_rule("a", "b"),
+                replace_rule("X", "c"),
+            ],
+        );
+
+        let plan = plan_renames(&previews, &by_id(&files)).expect("plan");
+        fs::create_dir(dir.join("c.txt")).expect("create obstacle");
+
+        let result = execute_rename_plan(plan);
+
+        // a -> b had already landed when b -> c failed. Taking it back has to route
+        // through staging, because moving b.txt straight back to a.txt would drop it on
+        // top of the file that is still waiting there.
+        assert_eq!(result.success_count(), 0, "{:?}", result.successes);
+        assert_eq!(fs::read_to_string(dir.join("a.txt")).expect("read a"), "AAA");
+        assert_eq!(fs::read_to_string(dir.join("b.txt")).expect("read b"), "BBB");
+
+        // And no file is left behind under a staging name.
+        let mut left: Vec<String> = fs::read_dir(&dir)
+            .expect("read dir")
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .collect();
+        left.sort();
+        assert_eq!(left, ["a.txt", "b.txt", "c.txt"]);
+
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn a_directory_and_its_contents_are_not_renamed_in_one_batch() {
+        let dir = temp_dir("nested");
+        fs::create_dir(dir.join("d")).expect("create d");
+        write_file(&dir.join("d"), "f.txt", "FFF");
+
+        // "Add folder" walks into subdirectories, and sorting the list by path descending
+        // is what puts the contents ahead of the directory that holds them.
+        let files = entries(&dir, &["d/f.txt", "d"]);
+        let mut engine = RenameEngine::new(config_with(vec![
+            replace_rule("f", "g"),
+            replace_rule("d", "dnew"),
+        ]));
+        engine.set_target(RenameTarget::Both);
+        let previews = engine.generate_previews(&files);
+        assert_eq!(previews.len(), 2);
+
+        // Staging f.txt inside d and then renaming d moves the staged file out from under
+        // its own temp path: neither its move nor its rollback can find it again, and it
+        // is left inside the renamed directory under the staging name.
+        let planned = plan_renames(&previews, &by_id(&files));
+        assert!(planned.is_err(), "the batch cannot be executed as planned");
+
+        // Nothing moved, and f.txt still has the name the user knows it by.
+        assert_eq!(
+            fs::read_to_string(dir.join("d").join("f.txt")).expect("read f"),
+            "FFF"
+        );
+        assert!(!dir.join("dnew").exists());
+
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
     fn plan_renames_rejects_duplicate_targets() {
         let dir = temp_dir("duplicate-target");
         let a = dir.join("a.txt");
@@ -1145,3 +2468,5 @@ mod rename_safety_tests {
         fs::remove_dir_all(dir).ok();
     }
 }
+
+

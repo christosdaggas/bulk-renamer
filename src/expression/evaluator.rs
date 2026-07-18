@@ -209,6 +209,13 @@ impl ExpressionEngine {
                 .accessed
                 .map(|d| d.format("%Y%m%d").to_string())
                 .unwrap_or_default(),
+            "taken" => entry
+                .metadata_cache
+                .as_ref()
+                .and_then(|m| m.exif.as_ref())
+                .and_then(|e| e.date_taken)
+                .map(|d| d.format("%Y%m%d").to_string())
+                .unwrap_or_default(),
 
             // Counters
             "index" | "counter" => self.counter.to_string(),
@@ -532,9 +539,21 @@ impl ExpressionEngine {
                     "created" => entry.created,
                     "modified" => entry.modified,
                     "accessed" => entry.accessed,
-                    _ => entry.modified,
+                    "exif" | "taken" => entry
+                        .metadata_cache
+                        .as_ref()
+                        .and_then(|m| m.exif.as_ref())
+                        .and_then(|e| e.date_taken),
+                    // Falling back to mtime renamed photos by the wrong date without
+                    // saying so, so an unknown source is an error.
+                    other => {
+                        return Err(RenamerError::InvalidExpression(format!(
+                            "Unknown filedate source: {}",
+                            other
+                        )));
+                    }
                 };
-                
+
                 date.map(|d| d.format(format).to_string())
                     .unwrap_or_default()
             }
@@ -636,7 +655,43 @@ impl Default for ExpressionEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::{ExifData, MetadataCache};
+    use chrono::TimeZone;
     use std::path::PathBuf;
+
+    /// A photo whose EXIF date differs from its mtime, so falling back to mtime shows.
+    fn make_photo_entry() -> FileEntry {
+        let taken = Local
+            .with_ymd_and_hms(2021, 7, 4, 9, 30, 0)
+            .single()
+            .expect("valid date taken");
+        let modified = Local
+            .with_ymd_and_hms(2024, 1, 2, 3, 4, 5)
+            .single()
+            .expect("valid modified time");
+
+        FileEntry {
+            modified: Some(modified),
+            metadata_cache: Some(MetadataCache {
+                exif: Some(ExifData {
+                    date_taken: Some(taken),
+                    camera_make: None,
+                    camera_model: None,
+                    focal_length: None,
+                    aperture: None,
+                    iso: None,
+                    exposure_time: None,
+                    gps_latitude: None,
+                    gps_longitude: None,
+                    orientation: None,
+                    width: None,
+                    height: None,
+                }),
+                ..MetadataCache::default()
+            }),
+            ..make_test_entry()
+        }
+    }
 
     fn make_test_entry() -> FileEntry {
         FileEntry {
@@ -695,8 +750,85 @@ mod tests {
     fn test_number_formatting() {
         let engine = ExpressionEngine::new();
         let entry = make_test_entry();
-        
+
         let result = engine.evaluate("file_${num(counter, 3)}", &entry, "vacation").unwrap();
         assert_eq!(result, "file_001");
+    }
+
+    #[test]
+    fn filedate_exif_reads_the_date_taken() {
+        let engine = ExpressionEngine::new();
+        let entry = make_photo_entry();
+
+        // The shape the "Photo Rename (EXIF Date)" preset uses.
+        let taken = engine
+            .evaluate("${filedate('exif', '%Y%m%d_%H%M%S')}", &entry, "photo")
+            .expect("evaluate exif date");
+        assert_eq!(taken, "20210704_093000");
+
+        let alias = engine
+            .evaluate("${filedate('taken', '%Y%m%d')}", &entry, "photo")
+            .expect("evaluate taken date");
+        assert_eq!(alias, "20210704");
+
+        // The other sources still read what they say they read.
+        let modified = engine
+            .evaluate("${filedate('modified', '%Y%m%d')}", &entry, "photo")
+            .expect("evaluate modified date");
+        assert_eq!(modified, "20240102");
+    }
+
+    #[test]
+    fn filedate_reports_an_unknown_source() {
+        let engine = ExpressionEngine::new();
+        let entry = make_photo_entry();
+
+        assert!(
+            engine
+                .evaluate("${filedate('modifed', '%Y%m%d')}", &entry, "photo")
+                .is_err(),
+            "a typo must surface instead of silently returning the mtime"
+        );
+    }
+
+    #[test]
+    fn taken_variable_reads_the_exif_date() {
+        let engine = ExpressionEngine::new();
+        let entry = make_photo_entry();
+
+        let result = engine
+            .evaluate("${taken}", &entry, "photo")
+            .expect("evaluate taken");
+        assert_eq!(result, "20210704");
+    }
+
+    #[test]
+    fn counter_and_total_follow_the_engine() {
+        let mut engine = ExpressionEngine::new();
+        let entry = make_test_entry();
+        engine.set_total(3);
+
+        assert_eq!(
+            engine
+                .evaluate("${index}/${total}", &entry, "vacation")
+                .expect("evaluate first"),
+            "1/3"
+        );
+
+        engine.next_counter();
+        assert_eq!(
+            engine
+                .evaluate("${counter}/${total}", &entry, "vacation")
+                .expect("evaluate second"),
+            "2/3"
+        );
+
+        engine.reset_counter();
+        assert_eq!(
+            engine
+                .evaluate("${index}", &entry, "vacation")
+                .expect("evaluate after reset"),
+            "1"
+        );
     }
 }

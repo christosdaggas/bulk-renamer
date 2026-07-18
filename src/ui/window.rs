@@ -4,7 +4,7 @@ use crate::core::{AppSettings, FileEntry, RenameBatch, RenameConfig, RenamePrevi
 use crate::core::types::ThemePreference;
 use crate::engine::{RenameEngine, RenameValidator};
 use crate::presets::{Preset, PresetManager};
-use crate::undo::{RenameLogEntry, RenameLogger, UndoManager};
+use crate::undo::{RenameLogEntry, RenameLogger, UndoManager, UndoResult};
 use async_channel;
 use libadwaita as adw;
 use adw::prelude::*;
@@ -815,20 +815,22 @@ impl RenamerWindow {
         ));
 
         // Setup drag and drop
-        let drop_target = gtk::DropTarget::new(gio::File::static_type(), gdk4::DragAction::COPY);
+        // Accept gdk::FileList first: text/uri-list also deserializes to a single
+        // gio::File, which would silently drop every file but the first.
+        let drop_target = gtk::DropTarget::new(glib::Type::INVALID, gdk4::DragAction::COPY);
+        drop_target.set_types(&[gdk4::FileList::static_type(), gio::File::static_type()]);
         drop_target.connect_drop(clone!(
             #[weak(rename_to = window)]
             self,
             #[upgrade_or]
             false,
             move |_, value, _, _| {
-                if let Ok(file) = value.get::<gio::File>() {
-                    if let Some(path) = file.path() {
-                        window.add_path(path);
-                        return true;
-                    }
+                let paths = Self::paths_from_drop_value(value);
+                if paths.is_empty() {
+                    return false;
                 }
-                false
+                window.add_paths(paths);
+                true
             }
         ));
         file_list.add_controller(drop_target);
@@ -1309,13 +1311,11 @@ impl RenamerWindow {
             self,
             move |result| {
                 if let Ok(files) = result {
-                    for i in 0..files.n_items() {
-                        if let Some(file) = files.item(i).and_downcast::<gio::File>() {
-                            if let Some(path) = file.path() {
-                                window.add_path(path);
-                            }
-                        }
-                    }
+                    let paths: Vec<PathBuf> = (0..files.n_items())
+                        .filter_map(|i| files.item(i).and_downcast::<gio::File>())
+                        .filter_map(|file| file.path())
+                        .collect();
+                    window.add_paths(paths);
                 }
             }
         ));
@@ -1340,57 +1340,79 @@ impl RenamerWindow {
         ));
     }
 
+    /// Extract every dropped path. A multi-file drop arrives as a gdk::FileList;
+    /// the single gio::File form is kept as a fallback for sources that offer it.
+    fn paths_from_drop_value(value: &glib::Value) -> Vec<PathBuf> {
+        if let Ok(list) = value.get::<gdk4::FileList>() {
+            list.files().iter().filter_map(|file| file.path()).collect()
+        } else if let Ok(file) = value.get::<gio::File>() {
+            file.path().into_iter().collect()
+        } else {
+            Vec::new()
+        }
+    }
+
     pub fn add_path(&self, path: PathBuf) {
-        if path.is_dir() {
-            // Use gio::spawn_blocking for directory traversal to avoid blocking the UI
-            let (sender, receiver) = async_channel::bounded::<Vec<FileEntry>>(1);
-            let settings = self.imp().settings.borrow().clone();
-            
-            gio::spawn_blocking(move || {
-                let mut entries = Vec::new();
-                for entry in walkdir::WalkDir::new(&path)
-                    .min_depth(1)
-                    .max_depth(settings.recursive_folder_depth)
-                    .follow_links(settings.follow_symlinks)
-                    .into_iter()
-                    .filter_map(|e| e.ok())
-                {
-                    let is_hidden = entry
-                        .file_name()
-                        .to_string_lossy()
-                        .starts_with('.');
-                    if is_hidden && !settings.show_hidden_files {
-                        continue;
-                    }
-                    if let Ok(mut file_entry) = FileEntry::from_path(entry.path().to_path_buf(), entry.depth()) {
-                        if settings.metadata_loading_enabled && file_entry.metadata_cache.is_none() {
-                            let _ = crate::metadata::load_metadata(&mut file_entry);
+        self.add_paths(vec![path]);
+    }
+
+    /// Add several paths in a single pass. Plain files are collected and appended
+    /// once, so the list and preview are rebuilt one time instead of per path.
+    pub fn add_paths(&self, paths: Vec<PathBuf>) {
+        let mut entries = Vec::new();
+
+        for path in paths {
+            if path.is_dir() {
+                // Use gio::spawn_blocking for directory traversal to avoid blocking the UI
+                let (sender, receiver) = async_channel::bounded::<Vec<FileEntry>>(1);
+                let settings = self.imp().settings.borrow().clone();
+
+                gio::spawn_blocking(move || {
+                    let mut entries = Vec::new();
+                    for entry in walkdir::WalkDir::new(&path)
+                        .min_depth(1)
+                        .max_depth(settings.recursive_folder_depth)
+                        .follow_links(settings.follow_symlinks)
+                        .into_iter()
+                        .filter_map(|e| e.ok())
+                    {
+                        let is_hidden = entry
+                            .file_name()
+                            .to_string_lossy()
+                            .starts_with('.');
+                        if is_hidden && !settings.show_hidden_files {
+                            continue;
                         }
-                        entries.push(file_entry);
+                        if let Ok(mut file_entry) = FileEntry::from_path(entry.path().to_path_buf(), entry.depth()) {
+                            if settings.metadata_loading_enabled && file_entry.metadata_cache.is_none() {
+                                let _ = crate::metadata::load_metadata(&mut file_entry);
+                            }
+                            entries.push(file_entry);
+                        }
                     }
-                }
-                let _ = sender.send_blocking(entries);
-            });
-            
-            // Receive results on main thread
-            glib::spawn_future_local(clone!(
-                #[weak(rename_to = window)]
-                self,
-                async move {
-                    if let Ok(entries) = receiver.recv().await {
-                        window.append_file_entries(entries);
+                    let _ = sender.send_blocking(entries);
+                });
+
+                // Receive results on main thread
+                glib::spawn_future_local(clone!(
+                    #[weak(rename_to = window)]
+                    self,
+                    async move {
+                        if let Ok(entries) = receiver.recv().await {
+                            window.append_file_entries(entries);
+                        }
                     }
+                ));
+            } else if let Ok(mut file_entry) = FileEntry::from_path(path, 0) {
+                if self.imp().settings.borrow().metadata_loading_enabled {
+                    let _ = crate::metadata::load_metadata(&mut file_entry);
                 }
-            ));
-        } else if let Ok(mut file_entry) = FileEntry::from_path(path, 0) {
-            if self.imp().settings.borrow().metadata_loading_enabled {
-                let _ = crate::metadata::load_metadata(&mut file_entry);
+                entries.push(file_entry);
             }
-            let mut files = self.imp().files.borrow_mut();
-            files.push(file_entry);
-            drop(files);
-            self.refresh_file_list();
-            self.update_preview();
+        }
+
+        if !entries.is_empty() {
+            self.append_file_entries(entries);
         }
     }
 
@@ -1701,10 +1723,20 @@ impl RenamerWindow {
         }
 
         if success_count > 0 {
-            self.clear_files();
-        } else {
-            self.update_preview();
+            // Drop only the entries that were actually renamed; anything that failed or
+            // was skipped stays in the list so the user can retry it.
+            let renamed: std::collections::HashSet<&PathBuf> = result
+                .successes
+                .iter()
+                .map(|record| &record.original_path)
+                .collect();
+            self.imp()
+                .files
+                .borrow_mut()
+                .retain(|entry| !renamed.contains(&entry.path));
+            self.refresh_file_list();
         }
+        self.update_preview();
     }
 
     fn log_rename_batch(&self, batch: &RenameBatch) {
@@ -1749,16 +1781,50 @@ impl RenamerWindow {
         dialog.present();
     }
 
+    /// Undo and redo refuse a move when the destination is occupied or the file no
+    /// longer matches what was recorded. That refusal is the one outcome a user has
+    /// to act on, so the per-record reason has to reach the dialog rather than be
+    /// implied by a shortfall in the count.
+    fn undo_result_message(summary: String, result: &UndoResult) -> String {
+        const MAX_REASONS: usize = 5;
+
+        let reasons: Vec<&str> = result
+            .results
+            .iter()
+            .filter(|record| !record.success)
+            .filter_map(|record| record.error.as_deref())
+            .collect();
+
+        if reasons.is_empty() {
+            return summary;
+        }
+
+        let mut message = summary;
+        for reason in reasons.iter().take(MAX_REASONS) {
+            message.push_str(&format!("\n\n{}", reason));
+        }
+        if reasons.len() > MAX_REASONS {
+            message.push_str(&format!(
+                "\n\n…and {} more.",
+                reasons.len() - MAX_REASONS
+            ));
+        }
+        message
+    }
+
     fn undo_last_batch(&self) {
         match self.imp().undo_manager.borrow_mut().undo() {
             Ok(result) => {
-                self.show_info_dialog(
-                    "Undo Complete",
-                    &format!(
-                        "Restored {} of {} renamed files.",
-                        result.success_count, result.total_records
-                    ),
+                let summary = format!(
+                    "Restored {} of {} renamed files.",
+                    result.success_count, result.total_records
                 );
+                let title = if result.all_successful() {
+                    "Undo Complete"
+                } else {
+                    "Undo Incomplete"
+                };
+                self.show_info_dialog(title, &Self::undo_result_message(summary, &result));
                 self.update_preview();
             }
             Err(err) => self.show_info_dialog("Undo Unavailable", &err.to_string()),
@@ -1768,13 +1834,16 @@ impl RenamerWindow {
     fn redo_last_batch(&self) {
         match self.imp().undo_manager.borrow_mut().redo() {
             Ok(result) => {
-                self.show_info_dialog(
-                    "Redo Complete",
-                    &format!(
-                        "Renamed {} of {} files again.",
-                        result.success_count, result.total_records
-                    ),
+                let summary = format!(
+                    "Renamed {} of {} files again.",
+                    result.success_count, result.total_records
                 );
+                let title = if result.all_successful() {
+                    "Redo Complete"
+                } else {
+                    "Redo Incomplete"
+                };
+                self.show_info_dialog(title, &Self::undo_result_message(summary, &result));
                 self.update_preview();
             }
             Err(err) => self.show_info_dialog("Redo Unavailable", &err.to_string()),
@@ -2299,7 +2368,13 @@ impl RenamerWindow {
             if let Some(r) = row_weak.upgrade() {
                 let idx = r.index() as usize;
                 rules_list_clone.remove(&r);
-                window.imp().config.borrow_mut().rules.remove(idx);
+                // Guard the model: a detached row reports index -1, which would wrap
+                // to a huge usize and panic inside Vec::remove.
+                let mut config = window.imp().config.borrow_mut();
+                if idx < config.rules.len() {
+                    config.rules.remove(idx);
+                }
+                drop(config);
                 window.update_preview();
             }
         });
@@ -2362,6 +2437,11 @@ impl RenamerWindow {
                 };
                 ("Change Case".to_string(), case_name.to_string(), "format-text-rich-symbolic".to_string())
             }
+            // Date/Time rules are Insert rules under the hood, but they get their own
+            // row so that rebuild_rules_list reproduces what add_datetime_rule built.
+            RuleType::Insert(i) if matches!(i.text, crate::core::InsertText::FileDate { .. }) => {
+                ("Date/Time".to_string(), Self::datetime_subtitle(i), "x-office-calendar-symbolic".to_string())
+            }
             RuleType::Insert(i) => {
                 let text = match &i.text {
                     crate::core::InsertText::Fixed(t) => t.clone(),
@@ -2415,6 +2495,9 @@ impl RenamerWindow {
             }
             RuleType::ChangeCase(c) => {
                 self.show_case_edit_dialog(rules_list, index, c.clone());
+            }
+            RuleType::Insert(i) if matches!(i.text, crate::core::InsertText::FileDate { .. }) => {
+                self.show_datetime_edit_dialog(rules_list, index, i.clone());
             }
             RuleType::Insert(i) => {
                 self.show_insert_edit_dialog(rules_list, index, i.clone());
@@ -3621,7 +3704,145 @@ impl RenamerWindow {
         dialog.present();
     }
 
+    fn show_datetime_edit_dialog(&self, rules_list: &gtk::ListBox, edit_index: usize, existing: crate::core::InsertRule) {
+        use crate::core::{DateSource, InsertPosition, InsertText};
+
+        let (existing_source, existing_format) = match &existing.text {
+            InsertText::FileDate { source, format } => {
+                let source_idx = match source {
+                    DateSource::Modified => 0,
+                    DateSource::Created => 1,
+                    DateSource::Now => 2,
+                    DateSource::ExifDateTaken => 3,
+                    DateSource::Accessed => 0,
+                };
+                let formats = ["%Y-%m-%d", "%Y%m%d", "%d-%m-%Y", "%b %d, %Y", "%Y-%m-%d_%H-%M-%S"];
+                let format_idx = formats.iter().position(|f| *f == format).unwrap_or(0);
+                (source_idx, format_idx)
+            }
+            _ => (0, 0),
+        };
+        let existing_position = if matches!(existing.position, InsertPosition::Suffix) { 1 } else { 0 };
+
+        let dialog = adw::Window::builder()
+            .title("Edit Date/Time")
+            .default_width(400)
+            .default_height(420)
+            .modal(true)
+            .transient_for(self)
+            .build();
+
+        let toolbar_view = adw::ToolbarView::new();
+
+        let header = adw::HeaderBar::new();
+        header.set_show_end_title_buttons(false);
+        header.set_show_start_title_buttons(false);
+
+        let cancel_btn = gtk::Button::with_label("Cancel");
+        cancel_btn.add_css_class("flat");
+        let save_btn = gtk::Button::with_label("Save");
+        save_btn.add_css_class("suggested-action");
+
+        header.pack_start(&cancel_btn);
+        header.pack_end(&save_btn);
+        toolbar_view.add_top_bar(&header);
+
+        let content = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .margin_start(24)
+            .margin_end(24)
+            .margin_top(12)
+            .margin_bottom(24)
+            .spacing(18)
+            .build();
+
+        // Date source
+        let source_group = adw::PreferencesGroup::new();
+        let source_dropdown = adw::ComboRow::builder()
+            .title("Date source")
+            .model(&gtk::StringList::new(&["File modified date", "File created date", "Current date", "EXIF date taken"]))
+            .selected(existing_source as u32)
+            .build();
+        source_group.add(&source_dropdown);
+        content.append(&source_group);
+
+        // Format
+        let format_group = adw::PreferencesGroup::builder()
+            .title("Format")
+            .build();
+
+        let format_dropdown = adw::ComboRow::builder()
+            .title("Date format")
+            .model(&gtk::StringList::new(&[
+                "2026-01-06",
+                "20260106",
+                "06-01-2026",
+                "Jan 06, 2026",
+                "2026-01-06_14-30-00",
+            ]))
+            .selected(existing_format as u32)
+            .build();
+        format_group.add(&format_dropdown);
+
+        let position_dropdown = adw::ComboRow::builder()
+            .title("Insert at")
+            .model(&gtk::StringList::new(&["Beginning (prefix)", "End (suffix)"]))
+            .selected(existing_position)
+            .build();
+        format_group.add(&position_dropdown);
+
+        content.append(&format_group);
+
+        toolbar_view.set_content(Some(&content));
+        dialog.set_content(Some(&toolbar_view));
+
+        let dialog_clone = dialog.clone();
+        cancel_btn.connect_clicked(move |_| {
+            dialog_clone.close();
+        });
+
+        let dialog_clone = dialog.clone();
+        let rules_list_clone = rules_list.clone();
+        let window = self.clone();
+        save_btn.connect_clicked(move |_| {
+            let source = source_dropdown.selected() as usize;
+            let format = format_dropdown.selected() as usize;
+            let position = position_dropdown.selected() as usize;
+
+            window.add_datetime_rule_at(&rules_list_clone, source, format, position, Some(edit_index));
+            dialog_clone.close();
+        });
+
+        dialog.present();
+    }
+
+    /// Subtitle shared by add_datetime_rule and get_rule_display_info so a rebuilt
+    /// row is identical to the one created when the rule was added.
+    fn datetime_subtitle(rule: &crate::core::InsertRule) -> String {
+        use crate::core::{DateSource, InsertPosition, InsertText};
+
+        let source_name = match &rule.text {
+            InsertText::FileDate { source, .. } => match source {
+                DateSource::Modified => "Modified date",
+                DateSource::Created => "Created date",
+                DateSource::Now => "Current date",
+                DateSource::ExifDateTaken => "EXIF date",
+                DateSource::Accessed => "Accessed date",
+            },
+            _ => "Date",
+        };
+        let pos_name = match rule.position {
+            InsertPosition::Suffix => "suffix",
+            _ => "prefix",
+        };
+        format!("{} as {}", source_name, pos_name)
+    }
+
     fn add_datetime_rule(&self, rules_list: &gtk::ListBox, source: usize, format: usize, position: usize) {
+        self.add_datetime_rule_at(rules_list, source, format, position, None);
+    }
+
+    fn add_datetime_rule_at(&self, rules_list: &gtk::ListBox, source: usize, format: usize, position: usize, edit_index: Option<usize>) {
         use crate::core::{RenameRule, RuleType, InsertRule, InsertText, InsertPosition, DateSource};
 
         let formats = ["%Y-%m-%d", "%Y%m%d", "%d-%m-%Y", "%b %d, %Y", "%Y-%m-%d_%H-%M-%S"];
@@ -3641,46 +3862,44 @@ impl RenamerWindow {
             InsertPosition::Suffix
         };
 
-        let rule = RenameRule::new(RuleType::Insert(InsertRule {
+        let insert_rule = InsertRule {
             text: InsertText::FileDate {
                 source: date_source,
-                format: format_str.clone(),
+                format: format_str,
             },
             position: insert_pos,
-        }));
+        };
+        let subtitle = Self::datetime_subtitle(&insert_rule);
+        let rule = RenameRule::new(RuleType::Insert(insert_rule));
 
-        self.imp().config.borrow_mut().rules.push(rule);
+        let rule_index = if let Some(idx) = edit_index {
+            // Update existing rule
+            self.imp().config.borrow_mut().rules[idx] = rule;
+            idx
+        } else {
+            // Add new rule
+            self.imp().config.borrow_mut().rules.push(rule);
+            self.imp().config.borrow().rules.len() - 1
+        };
 
-        let source_names = ["Modified date", "Created date", "Current date", "EXIF date"];
-        let pos_name = if position == 0 { "prefix" } else { "suffix" };
-        let subtitle = format!("{} as {}", source_names.get(source).unwrap_or(&"Date"), pos_name);
+        let row = self.create_rule_row(
+            "Date/Time",
+            &subtitle,
+            "x-office-calendar-symbolic",
+            rule_index,
+            rules_list,
+        );
 
-        let row = adw::ActionRow::builder()
-            .title("Date/Time")
-            .subtitle(&subtitle)
-            .build();
-
-        let icon = gtk::Image::from_icon_name("x-office-calendar-symbolic");
-        icon.add_css_class("dim-label");
-        row.add_prefix(&icon);
-
-        let remove_btn = gtk::Button::from_icon_name("edit-delete-symbolic");
-        remove_btn.add_css_class("flat");
-        remove_btn.add_css_class("circular");
-        remove_btn.set_valign(gtk::Align::Center);
-
-        let row_clone = row.clone();
-        let rules_list_clone = rules_list.clone();
-        let window = self.clone();
-        let rule_index = self.imp().config.borrow().rules.len() - 1;
-        remove_btn.connect_clicked(move |_| {
-            rules_list_clone.remove(&row_clone);
-            window.imp().config.borrow_mut().rules.remove(rule_index);
-            window.update_preview();
-        });
-
-        row.add_suffix(&remove_btn);
-        rules_list.append(&row);
+        if edit_index.is_some() {
+            // Remove old row and insert new one at same position
+            if let Some(old_row) = rules_list.row_at_index(rule_index as i32) {
+                let position = old_row.index();
+                rules_list.remove(&old_row);
+                rules_list.insert(&row, position);
+            }
+        } else {
+            rules_list.append(&row);
+        }
         self.update_preview();
     }
 
@@ -3984,3 +4203,378 @@ fn format_size(size: u64) -> String {
 }
 
 // Additional imports for drag-and-drop
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::{DateSource, InsertPosition, InsertText};
+    use std::sync::Once;
+
+    static GTK_INIT: Once = Once::new();
+
+    /// These tests drive real widgets, so they need a display; run them with
+    /// `cargo test -- --ignored --test-threads=1`.
+    fn test_window() -> RenamerWindow {
+        GTK_INIT.call_once(|| {
+            adw::init().expect("libadwaita must initialise for widget tests");
+        });
+        let app = adw::Application::builder()
+            .application_id("com.chrisdaggas.bulk-renamer.Tests")
+            .build();
+        RenamerWindow::new(&app)
+    }
+
+    fn rules_list_of(window: &RenamerWindow) -> gtk::ListBox {
+        window
+            .imp()
+            .rules_list
+            .borrow()
+            .clone()
+            .expect("window builds a rules list")
+    }
+
+    /// Last child of the row box is the delete button built by create_rule_row.
+    fn delete_button(row: &gtk::ListBoxRow) -> gtk::Button {
+        row.child()
+            .and_downcast::<gtk::Box>()
+            .and_then(|row_box| row_box.last_child())
+            .and_downcast::<gtk::Button>()
+            .expect("rule row ends with a delete button")
+    }
+
+    /// Third child of the row box is the label box; its first label is the title.
+    fn row_title(row: &gtk::ListBoxRow) -> String {
+        let label_box = row
+            .child()
+            .and_downcast::<gtk::Box>()
+            .and_then(|row_box| row_box.first_child())
+            .and_then(|drag_handle| drag_handle.next_sibling())
+            .and_then(|icon| icon.next_sibling())
+            .and_downcast::<gtk::Box>()
+            .expect("rule row has a label box");
+        label_box
+            .first_child()
+            .and_downcast::<gtk::Label>()
+            .expect("label box starts with the title label")
+            .label()
+            .to_string()
+    }
+
+    fn row_titles(rules_list: &gtk::ListBox) -> Vec<String> {
+        let mut titles = Vec::new();
+        let mut idx = 0;
+        while let Some(row) = rules_list.row_at_index(idx) {
+            titles.push(row_title(&row));
+            idx += 1;
+        }
+        titles
+    }
+
+    fn rule_titles(window: &RenamerWindow) -> Vec<String> {
+        window
+            .imp()
+            .config
+            .borrow()
+            .rules
+            .iter()
+            .map(|rule| window.get_rule_display_info(rule).0)
+            .collect()
+    }
+
+    fn add_replace(window: &RenamerWindow, rules_list: &gtk::ListBox, find: &str) {
+        window.add_replace_rule(
+            rules_list,
+            find.to_string(),
+            "x".to_string(),
+            true,
+            false,
+            true,
+        );
+    }
+
+    fn scenario_datetime_row_delete_removes_the_datetime_rule() {
+        let window = test_window();
+        let rules_list = rules_list_of(&window);
+
+        add_replace(&window, &rules_list, "a");
+        window.add_datetime_rule(&rules_list, 0, 0, 0);
+        add_replace(&window, &rules_list, "b");
+
+        // Delete the first Replace rule, which shifts the Date/Time rule down.
+        delete_button(&rules_list.row_at_index(0).expect("row 0")).emit_clicked();
+        assert_eq!(rule_titles(&window), vec!["Date/Time", "Replace"]);
+
+        // Now delete the Date/Time row: it must remove the Date/Time rule.
+        delete_button(&rules_list.row_at_index(0).expect("row 0")).emit_clicked();
+
+        assert_eq!(rule_titles(&window), vec!["Replace"]);
+        assert_eq!(row_titles(&rules_list), vec!["Replace"]);
+    }
+
+    fn scenario_datetime_row_delete_does_not_panic_when_it_is_the_last_rule() {
+        let window = test_window();
+        let rules_list = rules_list_of(&window);
+
+        add_replace(&window, &rules_list, "a");
+        window.add_datetime_rule(&rules_list, 0, 0, 0);
+
+        delete_button(&rules_list.row_at_index(0).expect("row 0")).emit_clicked();
+        // Used to panic with "removal index (is 1) should be < len (is 1)".
+        delete_button(&rules_list.row_at_index(0).expect("row 0")).emit_clicked();
+
+        assert!(window.imp().config.borrow().rules.is_empty());
+        assert!(rules_list.row_at_index(0).is_none());
+    }
+
+    fn scenario_datetime_row_survives_a_rules_list_rebuild() {
+        let window = test_window();
+        let rules_list = rules_list_of(&window);
+
+        window.add_datetime_rule(&rules_list, 3, 0, 1);
+        let before = row_titles(&rules_list);
+
+        window.rebuild_rules_list(&rules_list);
+
+        assert_eq!(before, vec!["Date/Time"]);
+        assert_eq!(row_titles(&rules_list), before);
+    }
+
+    #[test]
+    fn datetime_rules_are_labelled_as_date_time() {
+        let rule = crate::core::InsertRule {
+            text: InsertText::FileDate {
+                source: DateSource::ExifDateTaken,
+                format: "%Y-%m-%d".to_string(),
+            },
+            position: InsertPosition::Suffix,
+        };
+        assert_eq!(
+            RenamerWindow::datetime_subtitle(&rule),
+            "EXIF date as suffix"
+        );
+    }
+
+    fn scenario_drop_value_yields_every_file_of_a_multi_file_drop() {
+        let _window = test_window();
+        let files: Vec<gio::File> = ["/tmp/one.txt", "/tmp/two.txt", "/tmp/three.txt"]
+            .iter()
+            .map(gio::File::for_path)
+            .collect();
+        let value = gdk4::FileList::from_array(&files).to_value();
+
+        let paths = RenamerWindow::paths_from_drop_value(&value);
+
+        assert_eq!(paths.len(), 3);
+        assert_eq!(paths[2], PathBuf::from("/tmp/three.txt"));
+    }
+
+    fn scenario_drop_value_still_accepts_a_single_file() {
+        let _window = test_window();
+        let value = gio::File::for_path("/tmp/one.txt").to_value();
+
+        assert_eq!(
+            RenamerWindow::paths_from_drop_value(&value),
+            vec![PathBuf::from("/tmp/one.txt")]
+        );
+    }
+
+    fn scenario_drop_target_advertises_the_file_list_type() {
+        let window = test_window();
+        let file_list = window
+            .imp()
+            .file_list
+            .borrow()
+            .clone()
+            .expect("window builds a file list");
+
+        let controllers = file_list.observe_controllers();
+        let mut types = Vec::new();
+        for i in 0..controllers.n_items() {
+            if let Some(target) = controllers.item(i).and_downcast::<gtk::DropTarget>() {
+                types = target.types().to_vec();
+            }
+        }
+
+        assert!(types.contains(&gdk4::FileList::static_type()));
+    }
+
+    fn temp_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("bulk-renamer-{}-{}", name, Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        dir
+    }
+
+    fn scenario_adding_many_paths_rebuilds_the_list_once() {
+        let window = test_window();
+        let dir = temp_dir("batch-add");
+        for name in ["a.txt", "b.txt", "c.txt"] {
+            std::fs::write(dir.join(name), b"x").expect("write file");
+        }
+
+        // Seed the list so the count label already has a value, then count how many
+        // times refresh_file_list rewrites it while adding the rest.
+        window.add_path(dir.join("a.txt"));
+        let label = window
+            .imp()
+            .files_count_label
+            .borrow()
+            .clone()
+            .expect("window builds a count label");
+        let rebuilds = std::rc::Rc::new(std::cell::Cell::new(0usize));
+        let rebuilds_clone = rebuilds.clone();
+        label.connect_label_notify(move |_| {
+            rebuilds_clone.set(rebuilds_clone.get() + 1);
+        });
+
+        window.add_paths(vec![dir.join("b.txt"), dir.join("c.txt")]);
+
+        assert_eq!(window.imp().files.borrow().len(), 3);
+        assert_eq!(rebuilds.get(), 1, "two paths must cost one list rebuild");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn scenario_a_failed_rename_unwinds_the_whole_batch() {
+        let window = test_window();
+        let rules_list = rules_list_of(&window);
+        let dir = temp_dir("partial-rename");
+        for name in ["keep_a.txt", "keep_b.txt"] {
+            std::fs::write(dir.join(name), b"x").expect("write file");
+        }
+
+        window.add_paths(vec![dir.join("keep_a.txt"), dir.join("keep_b.txt")]);
+        add_replace(&window, &rules_list, "keep");
+
+        // Real pipeline: update_preview generated and validated the previews above.
+        let files: HashMap<Uuid, FileEntry> = window
+            .imp()
+            .files
+            .borrow()
+            .iter()
+            .map(|entry| (entry.id, entry.clone()))
+            .collect();
+        let previews = window.imp().previews.borrow().clone();
+        let plan = crate::engine::plan_renames(&previews, &files).expect("batch plans cleanly");
+
+        // Occupy the second target with a directory between planning and execution, so
+        // its rename fails. Phase 1 has already vacated every source, so the failed item
+        // has nowhere safe to return to while the finished moves stand: the batch unwinds
+        // rather than landing half-applied.
+        std::fs::create_dir(dir.join("x_b.txt")).expect("block b's target");
+        let result = crate::engine::execute_rename_plan(plan);
+        assert_eq!(result.success_count(), 0, "an unwound batch renames nothing");
+        assert!(result.failure_count() >= 1);
+
+        window.handle_rename_result(result);
+
+        let remaining: Vec<PathBuf> = window
+            .imp()
+            .files
+            .borrow()
+            .iter()
+            .map(|entry| entry.path.clone())
+            .collect();
+        assert_eq!(
+            remaining,
+            vec![dir.join("keep_a.txt"), dir.join("keep_b.txt")],
+            "nothing was renamed, so both files stay in the list"
+        );
+        assert!(
+            dir.join("keep_a.txt").exists() && dir.join("keep_b.txt").exists(),
+            "both originals must be back in place after the unwind"
+        );
+        assert!(!dir.join("x_a.txt").exists(), "no target may survive an unwind");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A refused undo is reported as a plain shortfall in the count, which leaves the
+    /// user with no idea that something is sitting on the destination. Drives a real
+    /// refusal rather than a hand-built result, so it stays honest about the reason
+    /// string the undo manager actually produces.
+    #[test]
+    fn a_refused_undo_tells_the_user_why() {
+        use crate::core::{RenameRule, ReplaceRule, RuleType};
+        use crate::engine::execute_renames;
+
+        let dir = std::env::temp_dir().join(format!("bulk-renamer-undo-msg-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        let data = dir.join("undo-data");
+        std::fs::create_dir_all(&data).expect("create data dir");
+
+        let a = dir.join("a.txt");
+        std::fs::write(&a, "original").expect("write a");
+
+        let config = RenameConfig {
+            rules: vec![RenameRule::new(RuleType::Replace(ReplaceRule {
+                find: "a".to_string(),
+                replace: "z".to_string(),
+                ..Default::default()
+            }))],
+            ..Default::default()
+        };
+
+        let entry = FileEntry::from_path(a.clone(), 0).expect("file entry");
+        let mut engine = RenameEngine::new(config);
+        let previews = engine.generate_previews(std::slice::from_ref(&entry));
+        let map: HashMap<Uuid, FileEntry> = std::iter::once((entry.id, entry)).collect();
+        let batch = execute_renames(&previews, &map)
+            .expect("execute renames")
+            .batch
+            .expect("batch");
+
+        let mut manager = UndoManager::new(data, true);
+        manager.record_batch(batch).expect("record");
+
+        // Put something back at the original path so the undo has to refuse.
+        std::fs::write(&a, "precious").expect("write precious");
+        let result = manager.undo().expect("undo");
+        assert_eq!(result.success_count, 0, "the undo must have been refused");
+
+        let summary = format!(
+            "Restored {} of {} renamed files.",
+            result.success_count, result.total_records
+        );
+        let message = RenamerWindow::undo_result_message(summary, &result);
+
+        let reason = result.results[0]
+            .error
+            .as_deref()
+            .expect("a refused record carries a reason");
+        assert!(
+            message.contains(reason),
+            "the dialog must repeat the refusal reason {:?}, got {:?}",
+            reason,
+            message
+        );
+        assert!(
+            !result.all_successful(),
+            "a refused undo is not a complete one"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The Rust harness runs every test on its own thread, but libadwaita may only
+    /// be used from the thread that initialised it, so all widget scenarios share
+    /// one test. Run with `cargo test --lib -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "needs a display"]
+    fn gtk_widget_regressions() {
+        let scenarios: Vec<(&str, fn())> = vec![
+            ("datetime_row_delete_removes_the_datetime_rule", scenario_datetime_row_delete_removes_the_datetime_rule),
+            ("datetime_row_delete_does_not_panic_when_it_is_the_last_rule", scenario_datetime_row_delete_does_not_panic_when_it_is_the_last_rule),
+            ("datetime_row_survives_a_rules_list_rebuild", scenario_datetime_row_survives_a_rules_list_rebuild),
+            ("drop_value_yields_every_file_of_a_multi_file_drop", scenario_drop_value_yields_every_file_of_a_multi_file_drop),
+            ("drop_value_still_accepts_a_single_file", scenario_drop_value_still_accepts_a_single_file),
+            ("drop_target_advertises_the_file_list_type", scenario_drop_target_advertises_the_file_list_type),
+            ("adding_many_paths_rebuilds_the_list_once", scenario_adding_many_paths_rebuilds_the_list_once),
+            ("a_failed_rename_unwinds_the_whole_batch", scenario_a_failed_rename_unwinds_the_whole_batch),
+        ];
+
+        for (name, scenario) in scenarios {
+            scenario();
+            eprintln!("scenario ok: {}", name);
+        }
+    }
+}
