@@ -45,6 +45,8 @@ mod imp {
         pub toast_overlay: RefCell<Option<adw::ToastOverlay>>,
         pub conflict_banner: RefCell<Option<adw::Banner>>,
         pub auto_resolve_conflicts: Cell<bool>,
+        pub search_text: RefCell<String>,
+        pub extension_filter: RefCell<String>,
     }
 
     #[glib::object_subclass]
@@ -427,9 +429,35 @@ impl RenamerWindow {
         clear_btn.add_css_class("flat");
         clear_btn.add_css_class("circular");
 
+        // Sorting reorders the store itself: batch order drives numbering.
+        let sort_menu = gio::Menu::new();
+        for (label, target) in [
+            ("Name (A to Z)", "name-asc"),
+            ("Name (Z to A)", "name-desc"),
+            ("Smallest First", "size-asc"),
+            ("Largest First", "size-desc"),
+            ("Oldest First", "modified-asc"),
+            ("Newest First", "modified-desc"),
+        ] {
+            let item = gio::MenuItem::new(Some(label), None);
+            item.set_action_and_target_value(
+                Some("win.sort-files"),
+                Some(&target.to_variant()),
+            );
+            sort_menu.append_item(&item);
+        }
+        let sort_btn = gtk::MenuButton::builder()
+            .icon_name("view-sort-descending-symbolic")
+            .tooltip_text("Sort Files")
+            .menu_model(&sort_menu)
+            .build();
+        sort_btn.add_css_class("flat");
+        sort_btn.add_css_class("circular");
+
         header_box.append(&title_label);
         header_box.append(&add_files_btn);
         header_box.append(&add_folder_btn);
+        header_box.append(&sort_btn);
         header_box.append(&clear_btn);
         panel.append(&header_box);
 
@@ -458,6 +486,47 @@ impl RenamerWindow {
 
         self.imp().files_count_label.replace(Some(files_count));
         self.imp().selected_count_label.replace(Some(selected_count));
+
+        // Search + extension filter: both feed the engine's FilterConfig, so
+        // non-matching files simply stay unchanged in the batch.
+        let filter_box = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .margin_start(12)
+            .margin_end(12)
+            .margin_bottom(6)
+            .spacing(6)
+            .build();
+
+        let search_entry = gtk::SearchEntry::builder()
+            .placeholder_text("Filter by name (use * and ? for globs)")
+            .hexpand(true)
+            .build();
+        search_entry.connect_search_changed(clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |entry| {
+                window.imp().search_text.replace(entry.text().to_string());
+                window.rebuild_filter();
+            }
+        ));
+
+        let ext_entry = gtk::Entry::builder()
+            .placeholder_text("Extensions: jpg, png")
+            .width_chars(14)
+            .tooltip_text("Only rename files with these extensions (comma-separated)")
+            .build();
+        ext_entry.connect_changed(clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |entry| {
+                window.imp().extension_filter.replace(entry.text().to_string());
+                window.rebuild_filter();
+            }
+        ));
+
+        filter_box.append(&search_entry);
+        filter_box.append(&ext_entry);
+        panel.append(&filter_box);
 
         // Virtualized file list over the shared FileItem store.
         let store = gio::ListStore::new::<FileItem>();
@@ -1177,6 +1246,27 @@ impl RenamerWindow {
         ));
         self.add_action(&quick_cleanup_action);
 
+        let sort_action =
+            gio::SimpleAction::new("sort-files", Some(glib::VariantTy::STRING));
+        sort_action.connect_activate(clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |_, param| {
+                use crate::core::{SortColumn, SortDirection};
+                let key = param.and_then(|v| v.str()).unwrap_or_default();
+                let (column, direction) = match key {
+                    "name-desc" => (SortColumn::OriginalName, SortDirection::Descending),
+                    "size-asc" => (SortColumn::Size, SortDirection::Ascending),
+                    "size-desc" => (SortColumn::Size, SortDirection::Descending),
+                    "modified-asc" => (SortColumn::Modified, SortDirection::Ascending),
+                    "modified-desc" => (SortColumn::Modified, SortDirection::Descending),
+                    _ => (SortColumn::OriginalName, SortDirection::Ascending),
+                };
+                window.sort_store(column, direction);
+            }
+        ));
+        self.add_action(&sort_action);
+
         let clear_rules_action = gio::SimpleAction::new("clear-rules", None);
         clear_rules_action.connect_activate(clone!(
             #[weak(rename_to = window)]
@@ -1489,6 +1579,76 @@ impl RenamerWindow {
         }
     }
 
+    /// Reorder the list model itself; batch order is what numbering follows.
+    pub(crate) fn sort_store(&self, column: crate::core::SortColumn, direction: crate::core::SortDirection) {
+        use crate::core::{SortColumn, SortDirection};
+        let Some(store) = self.imp().store.borrow().clone() else {
+            return;
+        };
+        let mut items = self.file_items();
+        items.sort_by(|a, b| {
+            let ea = a.entry();
+            let eb = b.entry();
+            let cmp = match column {
+                SortColumn::Size => ea.size.cmp(&eb.size),
+                SortColumn::Modified => ea.modified.cmp(&eb.modified),
+                _ => crate::engine::natural_cmp(&ea.original_name, &eb.original_name),
+            };
+            match direction {
+                SortDirection::Ascending => cmp,
+                SortDirection::Descending => cmp.reverse(),
+            }
+        });
+        store.splice(0, store.n_items(), &items);
+        self.request_preview();
+    }
+
+    /// Rebuild the engine filter from the search box and extension entry.
+    pub(crate) fn rebuild_filter(&self) {
+        use crate::core::{FilterConfig, FilterField, FilterMode, FilterOperator, FilterRule};
+
+        let search = self.imp().search_text.borrow().trim().to_string();
+        let extensions = self.imp().extension_filter.borrow().clone();
+        let mut rules = Vec::new();
+
+        if !search.is_empty() {
+            let operator = if search.contains('*') || search.contains('?') {
+                FilterOperator::MatchesGlob
+            } else {
+                FilterOperator::Contains
+            };
+            rules.push(FilterRule {
+                field: FilterField::Name,
+                operator,
+                value: search,
+            });
+        }
+
+        let ext_list: Vec<String> = extensions
+            .split(',')
+            .map(|ext| ext.trim().trim_start_matches('.').to_lowercase())
+            .filter(|ext| !ext.is_empty() && ext.chars().all(|c| c.is_ascii_alphanumeric()))
+            .collect();
+        if !ext_list.is_empty() {
+            // Single regex rule, because filter rules combine with AND.
+            rules.push(FilterRule {
+                field: FilterField::Extension,
+                operator: FilterOperator::Matches,
+                value: format!("^(?i)({})$", ext_list.join("|")),
+            });
+        }
+
+        self.imp().config.borrow_mut().filter = if rules.is_empty() {
+            None
+        } else {
+            Some(FilterConfig {
+                mode: FilterMode::Include,
+                rules,
+            })
+        };
+        self.request_preview();
+    }
+
     /// Recompute the preview if Live Preview is enabled. Explicit refreshes
     /// (the refresh button, executing, saving preferences) call
     /// `update_preview` directly instead.
@@ -1557,9 +1717,13 @@ impl RenamerWindow {
         engine.set_target(*self.imp().target.borrow());
         let engine_previews = engine.generate_previews(&included_entries);
 
-        // Merge back into item order: excluded rows become Skipped entries,
+        // Merge back into item order, keyed by file id: the engine's filter can
+        // drop entries entirely, excluded rows become Skipped entries, and
         // manual overrides replace the engine's name before validation.
-        let mut engine_iter = engine_previews.into_iter();
+        let mut by_id: HashMap<Uuid, RenamePreview> = engine_previews
+            .into_iter()
+            .map(|preview| (preview.file_id, preview))
+            .collect();
         let mut previews: Vec<RenamePreview> = Vec::with_capacity(items.len());
         for (item, entry) in items.iter().zip(files.iter()) {
             if !item.included() {
@@ -1573,16 +1737,14 @@ impl RenamerWindow {
                 });
                 continue;
             }
-            let mut preview = engine_iter
-                .next()
-                .unwrap_or_else(|| RenamePreview {
-                    file_id: entry.id,
-                    original_name: entry.original_name.clone(),
-                    new_name: entry.original_name.clone(),
-                    new_path: entry.path.clone(),
-                    status: RenameStatus::Unchanged,
-                    message: None,
-                });
+            let mut preview = by_id.remove(&entry.id).unwrap_or_else(|| RenamePreview {
+                file_id: entry.id,
+                original_name: entry.original_name.clone(),
+                new_name: entry.original_name.clone(),
+                new_path: entry.path.clone(),
+                status: RenameStatus::Unchanged,
+                message: Some("Filtered out".to_string()),
+            });
             if let Some(manual) = item.manual_override() {
                 preview.new_path = entry
                     .path

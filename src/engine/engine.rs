@@ -907,8 +907,8 @@ impl RenameEngine {
     ) {
         files.sort_by(|a, b| {
             let cmp = match column {
-                SortColumn::OriginalName => a.original_name.cmp(&b.original_name),
-                SortColumn::NewName => a.original_name.cmp(&b.original_name), // Preview sorts separately
+                SortColumn::OriginalName => natural_cmp(&a.original_name, &b.original_name),
+                SortColumn::NewName => natural_cmp(&a.original_name, &b.original_name), // Preview sorts separately
                 SortColumn::Status => std::cmp::Ordering::Equal,
                 SortColumn::Size => a.size.cmp(&b.size),
                 SortColumn::Modified => a.modified.cmp(&b.modified),
@@ -1325,6 +1325,56 @@ pub fn execute_rename_plan_with(
 /// dangling one as free, but renaming onto it still destroys the link.
 fn path_is_occupied(path: &Path) -> bool {
     std::fs::symlink_metadata(path).is_ok()
+}
+
+/// Human ("natural") ordering: digit runs compare as numbers, letters
+/// case-insensitively, so file2 sorts before file10.
+pub fn natural_cmp(a: &str, b: &str) -> std::cmp::Ordering {
+    let mut a_chars = a.chars().peekable();
+    let mut b_chars = b.chars().peekable();
+
+    loop {
+        match (a_chars.peek().copied(), b_chars.peek().copied()) {
+            (None, None) => return std::cmp::Ordering::Equal,
+            (None, Some(_)) => return std::cmp::Ordering::Less,
+            (Some(_), None) => return std::cmp::Ordering::Greater,
+            (Some(ca), Some(cb)) => {
+                if ca.is_ascii_digit() && cb.is_ascii_digit() {
+                    let mut num_a = 0u128;
+                    let mut len_a = 0u32;
+                    while let Some(c) = a_chars.peek().copied().filter(char::is_ascii_digit) {
+                        num_a = num_a.saturating_mul(10).saturating_add(c as u128 - '0' as u128);
+                        len_a += 1;
+                        a_chars.next();
+                    }
+                    let mut num_b = 0u128;
+                    let mut len_b = 0u32;
+                    while let Some(c) = b_chars.peek().copied().filter(char::is_ascii_digit) {
+                        num_b = num_b.saturating_mul(10).saturating_add(c as u128 - '0' as u128);
+                        len_b += 1;
+                        b_chars.next();
+                    }
+                    match num_a.cmp(&num_b) {
+                        std::cmp::Ordering::Equal => match len_a.cmp(&len_b) {
+                            // "01" vs "1": shorter run of the same value first.
+                            std::cmp::Ordering::Equal => continue,
+                            other => return other,
+                        },
+                        other => return other,
+                    }
+                }
+                let fa = ca.to_lowercase().next().unwrap_or(ca);
+                let fb = cb.to_lowercase().next().unwrap_or(cb);
+                match fa.cmp(&fb) {
+                    std::cmp::Ordering::Equal => {
+                        a_chars.next();
+                        b_chars.next();
+                    }
+                    other => return other,
+                }
+            }
+        }
+    }
 }
 
 /// How to resolve preview conflicts automatically.
@@ -2998,5 +3048,16 @@ mod rename_safety_tests {
         assert_eq!(previews[0].new_name, "taken.txt", "a skipped name is untouched");
 
         fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn natural_ordering_compares_digit_runs_as_numbers() {
+        use std::cmp::Ordering;
+        assert_eq!(natural_cmp("file2.txt", "file10.txt"), Ordering::Less);
+        assert_eq!(natural_cmp("file10.txt", "file2.txt"), Ordering::Greater);
+        assert_eq!(natural_cmp("File7", "file7"), Ordering::Equal.then(Ordering::Equal));
+        assert_eq!(natural_cmp("IMG_9.jpg", "img_10.jpg"), Ordering::Less);
+        assert_eq!(natural_cmp("a01", "a1"), Ordering::Greater);
+        assert_eq!(natural_cmp("alpha", "beta"), Ordering::Less);
     }
 }
