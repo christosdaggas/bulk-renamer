@@ -3,6 +3,7 @@
 //! This is the library crate that exposes all modules for the application.
 
 pub mod app;
+pub mod cli;
 pub mod core;
 pub mod engine;
 pub mod expression;

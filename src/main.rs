@@ -19,6 +19,13 @@ pub const APP_ID: &str = "com.chrisdaggas.bulk-renamer";
 pub const APP_NAME: &str = "Bulk Renamer";
 
 fn main() -> glib::ExitCode {
+    // Headless CLI mode: `preview`, `apply`, `list-presets`, --help and
+    // --version are handled before any GTK/libadwaita initialization. Plain
+    // file/directory arguments fall through to the GUI (HANDLES_OPEN) as before.
+    if let Some(code) = bulk_renamer::cli::run(std::env::args().skip(1).collect()) {
+        std::process::exit(code);
+    }
+
     // Set the program name to match StartupWMClass in the .desktop file
     // This is critical for Wayland/GNOME Shell to match the window to the correct icon
     glib::set_prgname(Some(APP_ID));

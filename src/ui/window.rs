@@ -464,7 +464,8 @@ impl RenamerWindow {
         let selection = gtk::MultiSelection::new(Some(store.clone()));
 
         let factory = gtk::SignalListItemFactory::new();
-        factory.connect_setup(|_, list_item| {
+        let window_for_factory = self.downgrade();
+        factory.connect_setup(move |_, list_item| {
             let Some(list_item) = list_item.downcast_ref::<gtk::ListItem>() else {
                 return;
             };
@@ -477,6 +478,10 @@ impl RenamerWindow {
                 .margin_bottom(6)
                 .build();
 
+            // Per-file inclusion: unchecked files are skipped by the batch.
+            let include_check = gtk::CheckButton::builder()
+                .tooltip_text("Include in the rename")
+                .build();
             let icon = gtk::Image::new();
             icon.add_css_class("dim-label");
             let name_label = gtk::Label::builder()
@@ -488,12 +493,16 @@ impl RenamerWindow {
                 .css_classes(vec!["dim-label", "caption"])
                 .build();
 
+            row_box.append(&include_check);
             row_box.append(&icon);
             row_box.append(&name_label);
             row_box.append(&size_label);
             list_item.set_child(Some(&row_box));
 
             let item_expr = list_item.property_expression("item");
+            item_expr
+                .chain_property::<FileItem>("included")
+                .bind(&include_check, "active", None::<&gtk::Widget>);
             item_expr
                 .chain_property::<FileItem>("icon-name")
                 .bind(&icon, "icon-name", None::<&gtk::Widget>);
@@ -503,6 +512,21 @@ impl RenamerWindow {
             item_expr
                 .chain_property::<FileItem>("size-text")
                 .bind(&size_label, "label", None::<&gtk::Widget>);
+
+            let list_item_weak = glib::clone::Downgrade::downgrade(list_item);
+            let window_weak = window_for_factory.clone();
+            include_check.connect_toggled(move |check| {
+                let Some(list_item) = list_item_weak.upgrade() else { return };
+                let Some(item) = list_item.item().and_downcast::<FileItem>() else {
+                    return;
+                };
+                if item.included() != check.is_active() {
+                    item.set_included(check.is_active());
+                    if let Some(window) = window_weak.upgrade() {
+                        window.request_preview();
+                    }
+                }
+            });
         });
 
         let file_list = gtk::ListView::builder()
@@ -920,22 +944,44 @@ impl RenamerWindow {
         original_col.set_expand(true);
         column_view.append_column(&original_col);
 
-        // New name column.
+        // New name column: click to type a manual override; clearing the text
+        // hands the name back to the rules.
         let new_factory = gtk::SignalListItemFactory::new();
-        new_factory.connect_setup(|_, list_item| {
+        let window_for_names = self.downgrade();
+        new_factory.connect_setup(move |_, list_item| {
             let Some(list_item) = list_item.downcast_ref::<gtk::ListItem>() else {
                 return;
             };
-            let label = gtk::Label::builder()
-                .xalign(0.0)
-                .ellipsize(gtk::pango::EllipsizeMode::Middle)
-                .build();
+            let label = gtk::EditableLabel::builder().build();
+            label.set_tooltip_text(Some(
+                "Click to type a name for this file; clear it to follow the rules again",
+            ));
             list_item.set_child(Some(&label));
 
             let item_expr = list_item.property_expression("item");
             item_expr
                 .chain_property::<FileItem>("new-name")
-                .bind(&label, "label", None::<&gtk::Widget>);
+                .bind(&label, "text", None::<&gtk::Widget>);
+
+            let list_item_weak = glib::clone::Downgrade::downgrade(list_item);
+            let window_weak = window_for_names.clone();
+            label.connect_editing_notify(move |label| {
+                if label.is_editing() {
+                    return;
+                }
+                let Some(list_item) = list_item_weak.upgrade() else { return };
+                let Some(item) = list_item.item().and_downcast::<FileItem>() else {
+                    return;
+                };
+                let typed = label.text().to_string();
+                if typed == item.new_name() {
+                    return;
+                }
+                item.set_manual_name(if typed.is_empty() { String::new() } else { typed });
+                if let Some(window) = window_weak.upgrade() {
+                    window.request_preview();
+                }
+            });
         });
         let new_col = gtk::ColumnViewColumn::new(Some("New Name"), Some(new_factory));
         new_col.set_expand(true);
@@ -1499,9 +1545,62 @@ impl RenamerWindow {
         let files: Vec<FileEntry> = items.iter().map(|item| item.entry()).collect();
         let config = self.imp().config.borrow().clone();
 
+        // Only included files run through the rules, so numbering and counters
+        // never spend a value on an excluded row.
+        let included_entries: Vec<FileEntry> = items
+            .iter()
+            .filter(|item| item.included())
+            .map(|item| item.entry())
+            .collect();
+
         let mut engine = RenameEngine::new(config);
         engine.set_target(*self.imp().target.borrow());
-        let mut previews = engine.generate_previews(&files);
+        let engine_previews = engine.generate_previews(&included_entries);
+
+        // Merge back into item order: excluded rows become Skipped entries,
+        // manual overrides replace the engine's name before validation.
+        let mut engine_iter = engine_previews.into_iter();
+        let mut previews: Vec<RenamePreview> = Vec::with_capacity(items.len());
+        for (item, entry) in items.iter().zip(files.iter()) {
+            if !item.included() {
+                previews.push(RenamePreview {
+                    file_id: entry.id,
+                    original_name: entry.original_name.clone(),
+                    new_name: entry.original_name.clone(),
+                    new_path: entry.path.clone(),
+                    status: RenameStatus::Skipped,
+                    message: Some("Excluded from this batch".to_string()),
+                });
+                continue;
+            }
+            let mut preview = engine_iter
+                .next()
+                .unwrap_or_else(|| RenamePreview {
+                    file_id: entry.id,
+                    original_name: entry.original_name.clone(),
+                    new_name: entry.original_name.clone(),
+                    new_path: entry.path.clone(),
+                    status: RenameStatus::Unchanged,
+                    message: None,
+                });
+            if let Some(manual) = item.manual_override() {
+                preview.new_path = entry
+                    .path
+                    .parent()
+                    .map(|p| p.join(&manual))
+                    .unwrap_or_else(|| PathBuf::from(&manual));
+                preview.status = if manual == entry.original_name {
+                    RenameStatus::Unchanged
+                } else {
+                    RenameStatus::WillRename
+                };
+                preview.new_name = manual;
+                preview.message = Some("Manually renamed".to_string());
+            }
+            previews.push(preview);
+        }
+        let mut previews = previews;
+
         let files_by_id: HashMap<Uuid, FileEntry> = files
             .iter()
             .map(|entry| (entry.id, entry.clone()))

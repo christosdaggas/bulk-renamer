@@ -35,6 +35,9 @@ mod imp {
         pub status_code: Cell<u8>,
         #[property(get, set)]
         pub included: Cell<bool>,
+        /// User-typed name override; empty means "follow the rules".
+        #[property(get, set)]
+        pub manual_name: RefCell<String>,
         pub entry: RefCell<Option<FileEntry>>,
     }
 
@@ -81,6 +84,12 @@ impl FileItem {
             .borrow()
             .clone()
             .expect("FileItem is always constructed with an entry")
+    }
+
+    /// The user-typed override for this file, if any.
+    pub fn manual_override(&self) -> Option<String> {
+        let manual = self.manual_name();
+        if manual.is_empty() { None } else { Some(manual) }
     }
 
     /// Write a preview result into the bound properties.
