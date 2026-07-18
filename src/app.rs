@@ -163,6 +163,9 @@ impl RenamerApplication {
         self.set_accels_for_action("win.quick-uppercase", &["<Control>2"]);
         self.set_accels_for_action("win.quick-titlecase", &["<Control>3"]);
         self.set_accels_for_action("win.quick-number", &["<Control>4"]);
+        self.set_accels_for_action("win.quick-cleanup", &["<Control>5"]);
+        self.set_accels_for_action("win.clear-rules", &["<Control><Shift>k"]);
+        self.set_accels_for_action("win.show-help-overlay", &["<Control>question"]);
     }
 }
 

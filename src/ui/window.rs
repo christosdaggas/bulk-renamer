@@ -74,10 +74,152 @@ impl RenamerWindow {
 
         window.setup_ui();
         window.setup_actions();
+        window.setup_help_overlay();
         window.load_settings();
         window.check_interrupted_renames();
 
         window
+    }
+
+    /// Keyboard shortcuts window, reachable via Ctrl+? and the main menu.
+    fn setup_help_overlay(&self) {
+        const SHORTCUTS_UI: &str = r##"<?xml version="1.0" encoding="UTF-8"?>
+<interface>
+  <object class="GtkShortcutsWindow" id="shortcuts">
+    <child>
+      <object class="GtkShortcutsSection">
+        <property name="section-name">shortcuts</property>
+        <child>
+          <object class="GtkShortcutsGroup">
+            <property name="title">Files</property>
+            <child>
+              <object class="GtkShortcutsShortcut">
+                <property name="title">Add Files</property>
+                <property name="accelerator">&lt;Control&gt;o</property>
+              </object>
+            </child>
+            <child>
+              <object class="GtkShortcutsShortcut">
+                <property name="title">Add Folder</property>
+                <property name="accelerator">&lt;Control&gt;&lt;Shift&gt;o</property>
+              </object>
+            </child>
+            <child>
+              <object class="GtkShortcutsShortcut">
+                <property name="title">Clear File List</property>
+                <property name="accelerator">&lt;Control&gt;&lt;Shift&gt;Delete</property>
+              </object>
+            </child>
+          </object>
+        </child>
+        <child>
+          <object class="GtkShortcutsGroup">
+            <property name="title">Renaming</property>
+            <child>
+              <object class="GtkShortcutsShortcut">
+                <property name="title">Rename Files</property>
+                <property name="accelerator">&lt;Control&gt;Return</property>
+              </object>
+            </child>
+            <child>
+              <object class="GtkShortcutsShortcut">
+                <property name="title">Undo Last Rename</property>
+                <property name="accelerator">&lt;Control&gt;z</property>
+              </object>
+            </child>
+            <child>
+              <object class="GtkShortcutsShortcut">
+                <property name="title">Redo Rename</property>
+                <property name="accelerator">&lt;Control&gt;&lt;Shift&gt;z</property>
+              </object>
+            </child>
+          </object>
+        </child>
+        <child>
+          <object class="GtkShortcutsGroup">
+            <property name="title">Quick Rules</property>
+            <child>
+              <object class="GtkShortcutsShortcut">
+                <property name="title">Lowercase</property>
+                <property name="accelerator">&lt;Control&gt;1</property>
+              </object>
+            </child>
+            <child>
+              <object class="GtkShortcutsShortcut">
+                <property name="title">Uppercase</property>
+                <property name="accelerator">&lt;Control&gt;2</property>
+              </object>
+            </child>
+            <child>
+              <object class="GtkShortcutsShortcut">
+                <property name="title">Title Case</property>
+                <property name="accelerator">&lt;Control&gt;3</property>
+              </object>
+            </child>
+            <child>
+              <object class="GtkShortcutsShortcut">
+                <property name="title">Numbering</property>
+                <property name="accelerator">&lt;Control&gt;4</property>
+              </object>
+            </child>
+            <child>
+              <object class="GtkShortcutsShortcut">
+                <property name="title">Tidy Up Names</property>
+                <property name="accelerator">&lt;Control&gt;5</property>
+              </object>
+            </child>
+            <child>
+              <object class="GtkShortcutsShortcut">
+                <property name="title">Clear All Rules</property>
+                <property name="accelerator">&lt;Control&gt;&lt;Shift&gt;k</property>
+              </object>
+            </child>
+          </object>
+        </child>
+        <child>
+          <object class="GtkShortcutsGroup">
+            <property name="title">Presets and Tools</property>
+            <child>
+              <object class="GtkShortcutsShortcut">
+                <property name="title">Save Preset</property>
+                <property name="accelerator">&lt;Control&gt;s</property>
+              </object>
+            </child>
+            <child>
+              <object class="GtkShortcutsShortcut">
+                <property name="title">Load Preset</property>
+                <property name="accelerator">&lt;Control&gt;l</property>
+              </object>
+            </child>
+            <child>
+              <object class="GtkShortcutsShortcut">
+                <property name="title">Preferences</property>
+                <property name="accelerator">&lt;Control&gt;comma</property>
+              </object>
+            </child>
+            <child>
+              <object class="GtkShortcutsShortcut">
+                <property name="title">Keyboard Shortcuts</property>
+                <property name="accelerator">&lt;Control&gt;question</property>
+              </object>
+            </child>
+            <child>
+              <object class="GtkShortcutsShortcut">
+                <property name="title">Quit</property>
+                <property name="accelerator">&lt;Control&gt;q</property>
+              </object>
+            </child>
+          </object>
+        </child>
+      </object>
+    </child>
+  </object>
+</interface>"##;
+
+        let builder = gtk::Builder::from_string(SHORTCUTS_UI);
+        if let Some(shortcuts) = builder.object::<gtk::ShortcutsWindow>("shortcuts") {
+            self.set_help_overlay(Some(&shortcuts));
+        }
     }
 
     /// Offer to restore files an interrupted batch left under staging names.
@@ -531,8 +673,23 @@ impl RenamerWindow {
         add_rule_btn.add_css_class("flat");
         add_rule_btn.add_css_class("circular");
 
+        let clear_rules_btn = gtk::Button::builder()
+            .icon_name("edit-clear-all-symbolic")
+            .tooltip_text("Clear All Rules")
+            .build();
+        clear_rules_btn.add_css_class("flat");
+        clear_rules_btn.add_css_class("circular");
+        clear_rules_btn.connect_clicked(clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |_| {
+                window.clear_all_rules();
+            }
+        ));
+
         header_box.append(&title_label);
         header_box.append(&add_rule_btn);
+        header_box.append(&clear_rules_btn);
         panel.append(&header_box);
 
         // Target type selector
@@ -938,6 +1095,29 @@ impl RenamerWindow {
         self.add_quick_rule_action("quick-lowercase", crate::core::CaseType::Lower);
         self.add_quick_rule_action("quick-uppercase", crate::core::CaseType::Upper);
         self.add_quick_rule_action("quick-titlecase", crate::core::CaseType::Title);
+
+        let quick_cleanup_action = gio::SimpleAction::new("quick-cleanup", None);
+        quick_cleanup_action.connect_activate(clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |_, _| {
+                window.commit_rule(
+                    crate::core::RuleType::Cleanup(crate::core::CleanupRule::default()),
+                    None,
+                );
+            }
+        ));
+        self.add_action(&quick_cleanup_action);
+
+        let clear_rules_action = gio::SimpleAction::new("clear-rules", None);
+        clear_rules_action.connect_activate(clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |_, _| {
+                window.clear_all_rules();
+            }
+        ));
+        self.add_action(&clear_rules_action);
 
         let quick_number_action = gio::SimpleAction::new("quick-number", None);
         quick_number_action.connect_activate(clone!(
@@ -1677,6 +1857,15 @@ impl RenamerWindow {
         self.request_preview();
     }
 
+    /// Remove every rule at once.
+    pub(crate) fn clear_all_rules(&self) {
+        self.imp().config.borrow_mut().rules.clear();
+        if let Some(rules_list) = self.imp().rules_list.borrow().as_ref() {
+            self.rebuild_rules_list(rules_list);
+        }
+        self.request_preview();
+    }
+
     // Thin rule builders kept for the quick-rule actions and the widget tests;
     // the dialogs go through rule_dialogs::open and commit_rule directly.
 
@@ -1802,6 +1991,7 @@ impl RenamerWindow {
         subtitle: &str,
         icon_name: &str,
         rule_index: usize,
+        enabled: bool,
         rules_list: &gtk::ListBox,
     ) -> gtk::ListBoxRow {
         let row_box = gtk::Box::builder()
@@ -1849,6 +2039,16 @@ impl RenamerWindow {
         label_box.append(&subtitle_label);
 
         row_box.append(&label_box);
+
+        // Enable toggle: the engine already skips disabled rules, this is the
+        // switch that was never exposed. Its handler is wired after the row
+        // exists, further down, so it can read its live index.
+        let enable_switch = gtk::Switch::builder()
+            .active(enabled)
+            .valign(gtk::Align::Center)
+            .tooltip_text("Enable this rule")
+            .build();
+        row_box.append(&enable_switch);
 
         // Edit button
         let edit_btn = gtk::Button::from_icon_name("document-edit-symbolic");
@@ -1929,6 +2129,24 @@ impl RenamerWindow {
 
         row.add_controller(drop_target);
 
+        // Connect enable switch
+        let window = self.clone();
+        let row_weak = row.downgrade();
+        enable_switch.connect_active_notify(move |switch| {
+            let Some(r) = row_weak.upgrade() else { return };
+            let idx = r.index();
+            if idx < 0 {
+                return;
+            }
+            {
+                let mut config = window.imp().config.borrow_mut();
+                if let Some(rule) = config.rules.get_mut(idx as usize) {
+                    rule.enabled = switch.is_active();
+                }
+            }
+            window.request_preview();
+        });
+
         // Connect edit button
         let window = self.clone();
         let rules_list_clone = rules_list.clone();
@@ -1988,7 +2206,7 @@ impl RenamerWindow {
         let rules = self.imp().config.borrow().rules.clone();
         for (idx, rule) in rules.iter().enumerate() {
             let (title, subtitle, icon) = self.get_rule_display_info(rule);
-            let row = self.create_rule_row(&title, &subtitle, &icon, idx, rules_list);
+            let row = self.create_rule_row(&title, &subtitle, &icon, idx, rule.enabled, rules_list);
             rules_list.append(&row);
         }
     }

@@ -39,6 +39,7 @@ pub fn build(window: &RenamerWindow) -> gtk::PopoverMenu {
 
     let app_section = gio::Menu::new();
     app_section.append(Some("Preferences"), Some("win.preferences"));
+    app_section.append(Some("Keyboard Shortcuts"), Some("win.show-help-overlay"));
     app_section.append(Some("About Bulk Renamer"), Some("win.about"));
     menu.append_section(None, &app_section);
 
