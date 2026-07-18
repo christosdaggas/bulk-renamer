@@ -29,12 +29,15 @@ pub fn build(window: &RenamerWindow) -> gtk::PopoverMenu {
 
     let tools_section = gio::Menu::new();
     tools_section.append(Some("Import from CSV…"), Some("win.import-csv"));
+    tools_section.append(Some("Export Preview as CSV…"), Some("win.export-preview"));
     tools_section.append(Some("Export Log…"), Some("win.export-log"));
+    tools_section.append(Some("Export Undo Script…"), Some("win.export-undo-script"));
     menu.append_section(None, &tools_section);
 
     let history_section = gio::Menu::new();
     history_section.append(Some("Undo Last Rename"), Some("win.undo"));
     history_section.append(Some("Redo Rename"), Some("win.redo"));
+    history_section.append(Some("Rename History…"), Some("win.history"));
     menu.append_section(None, &history_section);
 
     let app_section = gio::Menu::new();

@@ -6,6 +6,7 @@ pub mod csv_io;
 pub mod dialogs;
 pub mod execution;
 pub mod file_item;
+pub mod history_dialog;
 pub mod menu;
 pub mod preferences_dialog;
 pub mod presets_dialog;

@@ -150,23 +150,24 @@ pub fn run_rename(
     dialog.present();
 }
 
-enum HistoryDirection {
+enum HistoryOp {
     Undo,
     Redo,
+    UndoBatch(Uuid),
 }
 
 /// Run undo/redo on a worker thread. The UndoManager is moved out of the
 /// window for the duration and always put back, so the busy flag is the only
 /// thing guarding re-entrancy.
-fn run_history(window: &RenamerWindow, direction: HistoryDirection) {
+fn run_history(window: &RenamerWindow, op: HistoryOp) {
     if window.is_busy() {
         return;
     }
     window.set_busy(true);
 
-    let title = match direction {
-        HistoryDirection::Undo => "Undoing Rename…",
-        HistoryDirection::Redo => "Redoing Rename…",
+    let title = match op {
+        HistoryOp::Undo | HistoryOp::UndoBatch(_) => "Undoing Rename…",
+        HistoryOp::Redo => "Redoing Rename…",
     };
     let (dialog, bar, cancel_btn) = progress_window(window, title);
     cancel_btn.set_visible(false);
@@ -190,9 +191,13 @@ fn run_history(window: &RenamerWindow, direction: HistoryDirection) {
         crate::core::RenamerResult<UndoResult>,
     )>(1);
 
-    let is_undo = matches!(direction, HistoryDirection::Undo);
+    let is_undo = !matches!(op, HistoryOp::Redo);
     gio::spawn_blocking(move || {
-        let result = if is_undo { manager.undo() } else { manager.redo() };
+        let result = match op {
+            HistoryOp::Undo => manager.undo(),
+            HistoryOp::Redo => manager.redo(),
+            HistoryOp::UndoBatch(batch_id) => manager.undo_batch(batch_id),
+        };
         let _ = result_tx.send_blocking((manager, result));
     });
 
@@ -249,9 +254,14 @@ fn run_history(window: &RenamerWindow, direction: HistoryDirection) {
 }
 
 pub fn run_undo(window: &RenamerWindow) {
-    run_history(window, HistoryDirection::Undo);
+    run_history(window, HistoryOp::Undo);
 }
 
 pub fn run_redo(window: &RenamerWindow) {
-    run_history(window, HistoryDirection::Redo);
+    run_history(window, HistoryOp::Redo);
+}
+
+/// Undo one specific batch from the history browser.
+pub fn run_undo_batch(window: &RenamerWindow, batch_id: Uuid) {
+    run_history(window, HistoryOp::UndoBatch(batch_id));
 }

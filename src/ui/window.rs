@@ -1246,6 +1246,36 @@ impl RenamerWindow {
         ));
         self.add_action(&quick_cleanup_action);
 
+        let history_action = gio::SimpleAction::new("history", None);
+        history_action.connect_activate(clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |_, _| {
+                super::history_dialog::show(&window);
+            }
+        ));
+        self.add_action(&history_action);
+
+        let export_preview_action = gio::SimpleAction::new("export-preview", None);
+        export_preview_action.connect_activate(clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |_, _| {
+                super::csv_io::show_export_preview_dialog(&window);
+            }
+        ));
+        self.add_action(&export_preview_action);
+
+        let export_script_action = gio::SimpleAction::new("export-undo-script", None);
+        export_script_action.connect_activate(clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |_, _| {
+                super::csv_io::show_export_undo_script_dialog(&window);
+            }
+        ));
+        self.add_action(&export_script_action);
+
         let sort_action =
             gio::SimpleAction::new("sort-files", Some(glib::VariantTy::STRING));
         sort_action.connect_activate(clone!(
@@ -1577,6 +1607,63 @@ impl RenamerWindow {
         if let Some(label) = self.imp().selected_count_label.borrow().as_ref() {
             label.set_label(&format!("{} selected", count));
         }
+    }
+
+    /// History summaries for the browser, newest first: (id, title, sample).
+    pub(crate) fn undo_history(&self) -> Vec<(Uuid, String, String)> {
+        let manager = self.imp().undo_manager.borrow();
+        manager
+            .history()
+            .iter()
+            .rev()
+            .map(|batch| {
+                let count = batch.records.len();
+                let title = format!(
+                    "{} file{} — {}",
+                    count,
+                    if count == 1 { "" } else { "s" },
+                    batch.timestamp.format("%Y-%m-%d %H:%M")
+                );
+                let mut sample = batch
+                    .records
+                    .iter()
+                    .take(2)
+                    .map(|record| {
+                        format!(
+                            "{} → {}",
+                            record
+                                .original_path
+                                .file_name()
+                                .map(|n| n.to_string_lossy().into_owned())
+                                .unwrap_or_default(),
+                            record
+                                .new_path
+                                .file_name()
+                                .map(|n| n.to_string_lossy().into_owned())
+                                .unwrap_or_default()
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                if count > 2 {
+                    sample.push_str(", …");
+                }
+                (batch.id, title, sample)
+            })
+            .collect()
+    }
+
+    /// Shell script reverting the most recent batch, if any.
+    pub(crate) fn latest_undo_script(&self) -> Option<String> {
+        let manager = self.imp().undo_manager.borrow();
+        manager
+            .peek_undo()
+            .map(|batch| manager.generate_undo_script(batch))
+    }
+
+    /// Current previews, for exports.
+    pub(crate) fn previews_snapshot(&self) -> Vec<RenamePreview> {
+        self.imp().previews.borrow().clone()
     }
 
     /// Reorder the list model itself; batch order is what numbering follows.

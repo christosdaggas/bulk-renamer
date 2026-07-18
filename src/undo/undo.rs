@@ -409,11 +409,45 @@ impl UndoManager {
 
     /// Undo the last rename batch.
     pub fn undo(&mut self) -> RenamerResult<UndoResult> {
+        let index = self
+            .undo_stack
+            .len()
+            .checked_sub(1)
+            .ok_or(RenamerError::UndoNotAvailable {
+                reason: "No operations to undo".to_string(),
+            })?;
+        self.undo_stored_at(index)
+    }
+
+    /// Every batch still available to undo, oldest first.
+    pub fn history(&self) -> Vec<&RenameBatch> {
+        self.undo_stack.iter().map(|stored| &stored.batch).collect()
+    }
+
+    /// Undo a specific batch wherever it sits in the stack.
+    ///
+    /// Later batches may have renamed the same files again; the fingerprint
+    /// guard refuses exactly those records instead of moving the wrong file.
+    pub fn undo_batch(&mut self, batch_id: Uuid) -> RenamerResult<UndoResult> {
+        let index = self
+            .undo_stack
+            .iter()
+            .position(|stored| stored.batch.id == batch_id)
+            .ok_or(RenamerError::UndoNotAvailable {
+                reason: "That batch is no longer in the undo history".to_string(),
+            })?;
+        self.undo_stored_at(index)
+    }
+
+    fn undo_stored_at(&mut self, index: usize) -> RenamerResult<UndoResult> {
         let _lock = self.lock_data_dir();
 
-        let stored = self.undo_stack.pop_back().ok_or(RenamerError::UndoNotAvailable {
-            reason: "No operations to undo".to_string(),
-        })?;
+        let stored = self
+            .undo_stack
+            .remove(index)
+            .ok_or(RenamerError::UndoNotAvailable {
+                reason: "No operations to undo".to_string(),
+            })?;
         let batch = &stored.batch;
 
         let moves: Vec<PlannedMove<'_>> = batch
@@ -469,11 +503,11 @@ impl UndoManager {
             description: batch.description.clone(),
         };
         if !remainder.records.is_empty() {
-            self.undo_stack
-                .push_back(StoredBatch::with_fingerprints_from(
-                    remainder,
-                    &stored.fingerprints,
-                ));
+            let at = index.min(self.undo_stack.len());
+            self.undo_stack.insert(
+                at,
+                StoredBatch::with_fingerprints_from(remainder, &stored.fingerprints),
+            );
         }
 
         if !redo_stored.batch.records.is_empty() {
@@ -1599,6 +1633,34 @@ mod undo_safety_tests {
             .count();
         assert_eq!(on_disk, 1, "only the batch recorded after the toggle is persisted");
         assert_eq!(manager.undo_count(), 2, "both batches stay undoable in memory");
+
+        fs::remove_dir_all(dir).ok();
+    }
+
+    /// Per-batch undo: an older batch can be reverted while newer batches
+    /// stay in the history.
+    #[test]
+    fn a_specific_batch_can_be_undone_out_of_order() {
+        let dir = temp_dir("undo-batch");
+        let data = dir.join("data");
+        let a = dir.join("a.txt");
+        let b = dir.join("m.txt");
+        fs::write(&a, "one").expect("write a");
+        fs::write(&b, "two").expect("write b");
+
+        let mut manager = UndoManager::new(data, false);
+        let first = run_rename(&[a.clone()], replace_config("a", "x"));
+        let first_id = first.id;
+        manager.record_batch(first).expect("record first");
+        let second = run_rename(&[b.clone()], replace_config("m", "n"));
+        manager.record_batch(second).expect("record second");
+
+        let result = manager.undo_batch(first_id).expect("undo the older batch");
+        assert_eq!(result.success_count, 1);
+        assert!(a.exists(), "the older batch is reverted");
+        assert!(dir.join("n.txt").exists(), "the newer batch is untouched");
+        assert_eq!(manager.undo_count(), 1, "only the newer batch remains");
+        assert!(manager.history().iter().all(|batch| batch.id != first_id));
 
         fs::remove_dir_all(dir).ok();
     }

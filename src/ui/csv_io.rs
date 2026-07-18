@@ -141,3 +141,107 @@ fn read_csv_rename_plan(
 
     Ok((previews, files))
 }
+
+/// Export the current preview as a CSV that round-trips with Import from CSV
+/// (original_path,new_name columns).
+pub fn show_export_preview_dialog(window: &RenamerWindow) {
+    let previews = window.previews_snapshot();
+    if previews.is_empty() {
+        window.show_info_dialog("Nothing to Export", "Add files to build a preview first.");
+        return;
+    }
+
+    let dialog = gtk::FileDialog::builder()
+        .title("Export Preview as CSV")
+        .initial_name("rename-plan.csv")
+        .modal(true)
+        .build();
+
+    dialog.save(
+        Some(window),
+        gio::Cancellable::NONE,
+        clone!(
+            #[weak(rename_to = window)]
+            window,
+            move |result| {
+                if let Ok(file) = result {
+                    if let Some(path) = file.path() {
+                        match write_preview_csv(&previews, &path) {
+                            Ok(()) => window.show_toast("Preview exported as CSV"),
+                            Err(err) => {
+                                window.show_info_dialog("Export Failed", &err.to_string())
+                            }
+                        }
+                    }
+                }
+            }
+        ),
+    );
+}
+
+fn write_preview_csv(previews: &[RenamePreview], path: &std::path::Path) -> crate::core::RenamerResult<()> {
+    let mut writer = csv::Writer::from_path(path)?;
+    writer.write_record(["original_path", "new_name"])?;
+    for preview in previews {
+        // Renames stay within the parent directory, so the original path is
+        // the target's parent joined with the original name.
+        let original_path = preview
+            .new_path
+            .parent()
+            .map(|parent| parent.join(&preview.original_name))
+            .unwrap_or_else(|| PathBuf::from(&preview.original_name));
+        writer.write_record([
+            original_path.to_string_lossy().as_ref(),
+            preview.new_name.as_str(),
+        ])?;
+    }
+    writer.flush()?;
+    Ok(())
+}
+
+/// Save a shell script that reverts the most recent rename batch.
+pub fn show_export_undo_script_dialog(window: &RenamerWindow) {
+    let Some(script) = window.latest_undo_script() else {
+        window.show_info_dialog("No Undo Script", "No renames have been recorded yet.");
+        return;
+    };
+
+    let dialog = gtk::FileDialog::builder()
+        .title("Export Undo Script")
+        .initial_name("undo-rename.sh")
+        .modal(true)
+        .build();
+
+    dialog.save(
+        Some(window),
+        gio::Cancellable::NONE,
+        clone!(
+            #[weak(rename_to = window)]
+            window,
+            move |result| {
+                if let Ok(file) = result {
+                    if let Some(path) = file.path() {
+                        let outcome = std::fs::write(&path, &script).and_then(|()| {
+                            #[cfg(unix)]
+                            {
+                                use std::os::unix::fs::PermissionsExt;
+                                std::fs::set_permissions(
+                                    &path,
+                                    std::fs::Permissions::from_mode(0o755),
+                                )
+                            }
+                            #[cfg(not(unix))]
+                            Ok(())
+                        });
+                        match outcome {
+                            Ok(()) => window.show_toast("Undo script exported"),
+                            Err(err) => {
+                                window.show_info_dialog("Export Failed", &err.to_string())
+                            }
+                        }
+                    }
+                }
+            }
+        ),
+    );
+}
