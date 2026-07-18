@@ -138,7 +138,7 @@ pub fn run_rename(
         window.set_busy(false);
         match outcome {
             Ok(Ok(result)) if is_clean_cancellation(&result) => {
-                window.show_info_dialog("Rename Cancelled", "No files were changed.");
+                window.show_toast("Rename cancelled — no files were changed");
                 window.update_preview();
             }
             Ok(Ok(result)) => window.handle_rename_result(result),
@@ -229,15 +229,16 @@ fn run_history(window: &RenamerWindow, direction: HistoryDirection) {
                         verb, result.success_count, result.total_records
                     )
                 };
-                let title = if result.all_successful() {
-                    done_title
+                if result.all_successful() {
+                    window.show_toast(&summary);
                 } else {
-                    partial_title
-                };
-                window.show_info_dialog(
-                    title,
-                    &RenamerWindow::undo_result_message(summary, &result),
-                );
+                    let _ = done_title;
+                    window.show_info_dialog(
+                        partial_title,
+                        &RenamerWindow::undo_result_message(summary, &result),
+                    );
+                }
+                window.update_history_actions();
                 window.update_preview();
             }
             Err(err) => window.show_info_dialog(unavailable_title, &err.to_string()),

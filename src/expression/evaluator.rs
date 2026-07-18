@@ -5,7 +5,19 @@ use crate::engine::transformer::*;
 use crate::core::NumberFormat;
 use chrono::Local;
 use regex::Regex;
+use std::cell::RefCell;
 use std::collections::HashMap;
+use std::io::Read;
+use std::path::{Path, PathBuf};
+
+/// Content-hash algorithms exposed as template variables.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum HashAlgo {
+    Sha256,
+    Sha1,
+    Md5,
+    Crc32,
+}
 
 /// The expression engine evaluates template expressions.
 pub struct ExpressionEngine {
@@ -15,6 +27,10 @@ pub struct ExpressionEngine {
     total: i64,
     /// Custom variables.
     variables: HashMap<String, String>,
+    /// Per-pass cache of file content digests, keyed by (path, algorithm).
+    /// RefCell because `evaluate` takes `&self`; cleared by `reset_counter`,
+    /// which the rename engine calls at the start of every preview pass.
+    hash_cache: RefCell<HashMap<(PathBuf, HashAlgo), String>>,
 }
 
 impl ExpressionEngine {
@@ -24,6 +40,7 @@ impl ExpressionEngine {
             counter: 1,
             total: 0,
             variables: HashMap::new(),
+            hash_cache: RefCell::new(HashMap::new()),
         }
     }
 
@@ -32,9 +49,11 @@ impl ExpressionEngine {
         self.total = total;
     }
 
-    /// Reset the counter.
+    /// Reset per-pass state: the counter and the content-hash cache.
     pub fn reset_counter(&mut self) {
         self.counter = 1;
+        // A new pass may see changed file contents, so cached digests expire here.
+        self.hash_cache.borrow_mut().clear();
     }
 
     /// Set a custom variable.
@@ -227,6 +246,12 @@ impl ExpressionEngine {
 
             // File properties
             "size" => entry.size.to_string(),
+            // Content hashes (lowercase hex); a read error resolves to an
+            // empty string, matching how other variables behave on missing data.
+            "sha256" => self.file_hash(entry, HashAlgo::Sha256),
+            "sha1" => self.file_hash(entry, HashAlgo::Sha1),
+            "md5" => self.file_hash(entry, HashAlgo::Md5),
+            "crc32" => self.file_hash(entry, HashAlgo::Crc32),
             "created" => entry
                 .created
                 .map(|d| d.format("%Y%m%d").to_string())
@@ -674,6 +699,66 @@ impl ExpressionEngine {
         self.counter += 1;
         current
     }
+
+    /// Digest of the entry's file content, cached per (path, algorithm) for the
+    /// current pass. Unreadable files resolve to an empty string, and that
+    /// result is cached too so a missing file is not retried per variable use.
+    fn file_hash(&self, entry: &FileEntry, algo: HashAlgo) -> String {
+        let key = (entry.path.clone(), algo);
+        if let Some(cached) = self.hash_cache.borrow().get(&key) {
+            return cached.clone();
+        }
+        let digest = compute_file_hash(&entry.path, algo).unwrap_or_default();
+        self.hash_cache.borrow_mut().insert(key, digest.clone());
+        digest
+    }
+}
+
+/// Stream a file through `update` in fixed-size chunks so arbitrarily large
+/// files are hashed without ever being held in memory.
+fn stream_file<F: FnMut(&[u8])>(path: &Path, mut update: F) -> std::io::Result<()> {
+    let mut file = std::fs::File::open(path)?;
+    let mut buf = [0u8; 64 * 1024];
+    loop {
+        let n = file.read(&mut buf)?;
+        if n == 0 {
+            return Ok(());
+        }
+        update(&buf[..n]);
+    }
+}
+
+/// Render digest bytes as lowercase hex.
+fn to_hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{:02x}", b)).collect()
+}
+
+/// Compute the lowercase-hex content digest of `path` with `algo`.
+fn compute_file_hash(path: &Path, algo: HashAlgo) -> std::io::Result<String> {
+    use sha2::Digest;
+
+    match algo {
+        HashAlgo::Sha256 => {
+            let mut hasher = sha2::Sha256::new();
+            stream_file(path, |chunk| hasher.update(chunk))?;
+            Ok(to_hex(&hasher.finalize()))
+        }
+        HashAlgo::Sha1 => {
+            let mut hasher = sha1::Sha1::new();
+            stream_file(path, |chunk| hasher.update(chunk))?;
+            Ok(to_hex(&hasher.finalize()))
+        }
+        HashAlgo::Md5 => {
+            let mut hasher = md5::Md5::new();
+            stream_file(path, |chunk| hasher.update(chunk))?;
+            Ok(to_hex(&hasher.finalize()))
+        }
+        HashAlgo::Crc32 => {
+            let mut hasher = crc32fast::Hasher::new();
+            stream_file(path, |chunk| hasher.update(chunk))?;
+            Ok(format!("{:08x}", hasher.finalize()))
+        }
+    }
 }
 
 impl Default for ExpressionEngine {
@@ -920,6 +1005,115 @@ mod tests {
             .evaluate("${concat(left(name, 3), '_', upper(right(name, 4)))}", &entry, "vacation")
             .expect("evaluate multi-argument nested call");
         assert_eq!(result, "vac_TION");
+    }
+
+    /// A real on-disk file with known content, plus an entry pointing at it.
+    fn make_hash_fixture(content: &[u8]) -> (PathBuf, FileEntry) {
+        let path = std::env::temp_dir().join(format!(
+            "bulk-renamer-hash-test-{}.txt",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::write(&path, content).expect("write hash fixture");
+        let entry = FileEntry {
+            path: path.clone(),
+            ..make_test_entry()
+        };
+        (path, entry)
+    }
+
+    #[test]
+    fn hash_variables_digest_file_content() {
+        let (path, entry) = make_hash_fixture(b"hello world");
+        let engine = ExpressionEngine::new();
+
+        assert_eq!(
+            engine.evaluate("${sha256}", &entry, "hw").expect("sha256"),
+            "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9"
+        );
+        assert_eq!(
+            engine.evaluate("${sha1}", &entry, "hw").expect("sha1"),
+            "2aae6c35c94fcfb415dbe95f408b9ce91ee846ed"
+        );
+        assert_eq!(
+            engine.evaluate("${md5}", &entry, "hw").expect("md5"),
+            "5eb63bbbe01eeed093cb22bb8f5acdc3"
+        );
+        // Leading zero also proves the crc32 output is padded to 8 digits.
+        assert_eq!(
+            engine.evaluate("${crc32}", &entry, "hw").expect("crc32"),
+            "0d4a1185"
+        );
+
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn hash_variables_compose_with_functions() {
+        let (path, entry) = make_hash_fixture(b"hello world");
+        let engine = ExpressionEngine::new();
+
+        // Function arguments resolve variables, so substr truncates a digest.
+        assert_eq!(
+            engine
+                .evaluate("${substr(sha256, 0, 8)}", &entry, "hw")
+                .expect("substr over sha256"),
+            "b94d27b9"
+        );
+        assert_eq!(
+            engine
+                .evaluate("${upper(left(md5, 4))}", &entry, "hw")
+                .expect("nested functions over md5"),
+            "5EB6"
+        );
+
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn hash_variables_resolve_empty_on_read_error() {
+        let engine = ExpressionEngine::new();
+        let entry = FileEntry {
+            path: PathBuf::from("/nonexistent/bulk-renamer-missing-file.bin"),
+            ..make_test_entry()
+        };
+
+        for template in ["${sha256}", "${sha1}", "${md5}", "${crc32}"] {
+            assert_eq!(
+                engine
+                    .evaluate(template, &entry, "x")
+                    .expect("missing file evaluates"),
+                "",
+                "{template} should resolve to an empty string on read error"
+            );
+        }
+    }
+
+    #[test]
+    fn hash_cache_holds_within_a_pass_and_clears_on_reset() {
+        let (path, entry) = make_hash_fixture(b"hello world");
+        let mut engine = ExpressionEngine::new();
+
+        assert_eq!(
+            engine.evaluate("${crc32}", &entry, "x").expect("first read"),
+            "0d4a1185"
+        );
+
+        // Mid-pass content changes are not re-read: the digest is cached.
+        std::fs::write(&path, b"changed").expect("rewrite fixture");
+        assert_eq!(
+            engine.evaluate("${crc32}", &entry, "x").expect("cached read"),
+            "0d4a1185"
+        );
+
+        // reset_counter starts a new pass and drops the cache.
+        engine.reset_counter();
+        let fresh = engine
+            .evaluate("${crc32}", &entry, "x")
+            .expect("post-reset read");
+        assert_ne!(fresh, "0d4a1185");
+        assert_eq!(fresh.len(), 8);
+
+        std::fs::remove_file(&path).ok();
     }
 
     #[test]

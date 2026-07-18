@@ -42,6 +42,12 @@ id3 = "1.13"
 mp4ameta = "0.11"
 chrono = { version = "0.4", features = ["serde"] }
 
+# Checksums for content-hash template variables
+sha2 = "0.10"
+sha1 = "0.10"
+md-5 = "0.10"
+crc32fast = "1"
+
 # File system utilities
 walkdir = "2.4"
 filetime = "0.2"

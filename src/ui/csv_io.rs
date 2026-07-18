@@ -50,7 +50,7 @@ pub fn show_export_dialog(window: &RenamerWindow) {
                 if let Ok(file) = result {
                     if let Some(path) = file.path() {
                         match window.export_log_csv(&path) {
-                            Ok(()) => window.show_info_dialog("Log Exported", "Rename log exported to CSV."),
+                            Ok(()) => window.show_toast("Rename log exported to CSV"),
                             Err(err) => window.show_info_dialog("Export Failed", &err.to_string()),
                         }
                     }

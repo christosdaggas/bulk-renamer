@@ -42,6 +42,9 @@ mod imp {
         pub logger: RefCell<RenameLogger>,
         pub preview_pending: RefCell<Option<glib::SourceId>>,
         pub busy: Cell<bool>,
+        pub toast_overlay: RefCell<Option<adw::ToastOverlay>>,
+        pub conflict_banner: RefCell<Option<adw::Banner>>,
+        pub auto_resolve_conflicts: Cell<bool>,
     }
 
     #[glib::object_subclass]
@@ -283,7 +286,11 @@ impl RenamerWindow {
         toolbar_view.add_top_bar(&header);
         toolbar_view.set_content(Some(&content));
 
-        self.set_content(Some(&toolbar_view));
+        let toast_overlay = adw::ToastOverlay::new();
+        toast_overlay.set_child(Some(&toolbar_view));
+        self.imp().toast_overlay.replace(Some(toast_overlay.clone()));
+
+        self.set_content(Some(&toast_overlay));
     }
 
     fn create_header_bar(&self) -> adw::HeaderBar {
@@ -840,6 +847,21 @@ impl RenamerWindow {
 
         self.imp().preview_count_label.replace(Some(preview_count));
 
+        // Conflict banner: one click renames collisions to "name (n)".
+        let banner = adw::Banner::new("");
+        banner.set_button_label(Some("Add Numbers"));
+        banner.connect_button_clicked(clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |_| {
+                window.imp().auto_resolve_conflicts.set(true);
+                window.update_preview();
+                window.show_toast("Collisions are renamed with (n) suffixes");
+            }
+        ));
+        panel.append(&banner);
+        self.imp().conflict_banner.replace(Some(banner));
+
         // The preview is the same FileItem store seen through a filter; cells
         // bind to item properties, so preview refreshes never rebuild widgets.
         let store = self
@@ -1170,6 +1192,7 @@ impl RenamerWindow {
         }
 
         self.imp().settings.replace(settings);
+        self.update_history_actions();
     }
 
     fn save_settings(&self) {
@@ -1494,6 +1517,14 @@ impl RenamerWindow {
             }
         }
 
+        // Once the user opts in, collisions keep resolving on every refresh.
+        if self.imp().auto_resolve_conflicts.get() {
+            crate::engine::resolve_preview_conflicts(
+                &mut previews,
+                crate::engine::ConflictResolution::AppendCounter,
+            );
+        }
+
         // Count stats
         let will_rename = previews.iter()
             .filter(|p| matches!(p.status, RenameStatus::WillRename))
@@ -1517,6 +1548,19 @@ impl RenamerWindow {
 
         if let Some(button) = self.imp().rename_button.borrow().as_ref() {
             button.set_sensitive(will_rename > 0 && conflicts == 0 && errors == 0);
+        }
+
+        if let Some(banner) = self.imp().conflict_banner.borrow().as_ref() {
+            if conflicts > 0 {
+                banner.set_title(&format!(
+                    "{} name{} collide with existing files",
+                    conflicts,
+                    if conflicts == 1 { "" } else { "s" }
+                ));
+                banner.set_revealed(true);
+            } else {
+                banner.set_revealed(false);
+            }
         }
 
         // Push results into the bound item properties; the views update in place.
@@ -1624,10 +1668,7 @@ impl RenamerWindow {
         }
 
         if error_count == 0 {
-            self.show_info_dialog(
-                "Rename Complete",
-                &format!("Successfully renamed {} files.", success_count),
-            );
+            self.show_toast_with_undo(&format!("Renamed {} files", success_count));
         } else {
             let details = result
                 .failures
@@ -1675,6 +1716,7 @@ impl RenamerWindow {
             }
             self.refresh_file_count();
         }
+        self.update_history_actions();
         self.update_preview();
     }
 
@@ -1709,6 +1751,37 @@ impl RenamerWindow {
             };
             if let Err(err) = logger.log_jsonl(&entry) {
                 tracing::error!("Failed to write rename JSONL log: {}", err);
+            }
+        }
+    }
+
+    /// Non-blocking confirmation for routine outcomes; dialogs stay for
+    /// errors and anything the user must act on.
+    pub(crate) fn show_toast(&self, message: &str) {
+        if let Some(overlay) = self.imp().toast_overlay.borrow().as_ref() {
+            overlay.add_toast(adw::Toast::new(message));
+        }
+    }
+
+    /// Toast with a one-click Undo button wired to win.undo.
+    pub(crate) fn show_toast_with_undo(&self, message: &str) {
+        if let Some(overlay) = self.imp().toast_overlay.borrow().as_ref() {
+            let toast = adw::Toast::new(message);
+            toast.set_button_label(Some("Undo"));
+            toast.set_action_name(Some("win.undo"));
+            overlay.add_toast(toast);
+        }
+    }
+
+    /// Keep the Undo/Redo menu items and accelerators in sync with the stacks.
+    pub(crate) fn update_history_actions(&self) {
+        let (can_undo, can_redo) = {
+            let manager = self.imp().undo_manager.borrow();
+            (manager.can_undo(), manager.can_redo())
+        };
+        for (name, enabled) in [("undo", can_undo), ("redo", can_redo)] {
+            if let Some(action) = self.lookup_action(name).and_downcast::<gio::SimpleAction>() {
+                action.set_enabled(enabled);
             }
         }
     }
@@ -2248,7 +2321,7 @@ impl RenamerWindow {
             self.rebuild_rules_list(rules_list);
         }
         self.request_preview();
-        self.show_info_dialog("Preset Loaded", &format!("Loaded '{}'.", preset.name));
+        self.show_toast(&format!("Loaded preset '{}'", preset.name));
     }
 
     fn show_import_csv_dialog(&self) {

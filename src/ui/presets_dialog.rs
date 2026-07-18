@@ -39,7 +39,7 @@ pub fn show_save(window: &RenamerWindow) {
                     let preset = Preset::new(&name, config);
                     let mut manager = PresetManager::default();
                     match manager.add_preset(preset) {
-                        Ok(()) => window.show_info_dialog("Preset Saved", "The current rules were saved."),
+                        Ok(()) => window.show_toast("Preset saved"),
                         Err(err) => window.show_info_dialog("Preset Not Saved", &err.to_string()),
                     }
                 }

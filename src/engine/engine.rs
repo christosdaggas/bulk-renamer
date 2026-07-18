@@ -1327,6 +1327,76 @@ fn path_is_occupied(path: &Path) -> bool {
     std::fs::symlink_metadata(path).is_ok()
 }
 
+/// How to resolve preview conflicts automatically.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConflictResolution {
+    /// Append " (n)" before the extension until the name is free.
+    AppendCounter,
+    /// Leave the conflicting files out of the batch.
+    Skip,
+}
+
+/// Post-preview pass turning conflicts into renameable or skipped entries.
+///
+/// `AppendCounter` picks the first " (n)" suffix that is free both on disk and
+/// among the batch's own targets, which also untangles internal collisions
+/// (several files mapping to one name). A name that stays taken through
+/// `(999)` is left as a conflict.
+pub fn resolve_preview_conflicts(previews: &mut [RenamePreview], resolution: ConflictResolution) {
+    let mut taken: HashSet<PathBuf> = previews
+        .iter()
+        .filter(|p| matches!(p.status, RenameStatus::WillRename))
+        .map(|p| p.new_path.clone())
+        .collect();
+
+    for preview in previews.iter_mut() {
+        if !matches!(
+            preview.status,
+            RenameStatus::Conflict | RenameStatus::InternalConflict
+        ) {
+            continue;
+        }
+
+        match resolution {
+            ConflictResolution::Skip => {
+                preview.status = RenameStatus::Skipped;
+                preview.message = Some("Skipped: the name is already taken".to_string());
+            }
+            ConflictResolution::AppendCounter => {
+                let parent = preview.new_path.parent().map(Path::to_path_buf);
+                let (stem, ext) = match preview.new_name.rsplit_once('.') {
+                    // A leading dot is a hidden file, not an extension.
+                    Some((stem, ext)) if !stem.is_empty() => {
+                        (stem.to_string(), format!(".{}", ext))
+                    }
+                    _ => (preview.new_name.clone(), String::new()),
+                };
+
+                let mut resolved = None;
+                for n in 1..=999u32 {
+                    let candidate_name = format!("{} ({}){}", stem, n, ext);
+                    let candidate_path = parent
+                        .as_ref()
+                        .map(|p| p.join(&candidate_name))
+                        .unwrap_or_else(|| PathBuf::from(&candidate_name));
+                    if !path_is_occupied(&candidate_path) && !taken.contains(&candidate_path) {
+                        resolved = Some((candidate_name, candidate_path));
+                        break;
+                    }
+                }
+
+                if let Some((name, path)) = resolved {
+                    taken.insert(path.clone());
+                    preview.new_name = name;
+                    preview.new_path = path;
+                    preview.status = RenameStatus::WillRename;
+                    preview.message = Some("Numbered to avoid a collision".to_string());
+                }
+            }
+        }
+    }
+}
+
 /// Whether two paths name the same filesystem object right now.
 ///
 /// On a case-insensitive mount (vfat/exFAT USB sticks, NTFS, CIFS, ext4
@@ -2843,7 +2913,90 @@ mod rename_safety_tests {
 
         fs::remove_dir_all(dir).ok();
     }
+
+    #[test]
+    fn conflict_resolution_appends_counters_until_free() {
+        let dir = temp_dir("resolve-append");
+        write_file(&dir, "taken.txt", "existing");
+        write_file(&dir, "taken (1).txt", "also existing");
+        let source = write_file(&dir, "source.txt", "content");
+
+        let entry = FileEntry::from_path(source, 0).expect("entry");
+        let mut previews = vec![RenamePreview {
+            file_id: entry.id,
+            original_name: entry.original_name.clone(),
+            new_name: "taken.txt".to_string(),
+            new_path: dir.join("taken.txt"),
+            status: RenameStatus::Conflict,
+            message: None,
+        }];
+
+        resolve_preview_conflicts(&mut previews, ConflictResolution::AppendCounter);
+
+        assert_eq!(previews[0].new_name, "taken (2).txt");
+        assert_eq!(previews[0].new_path, dir.join("taken (2).txt"));
+        assert!(matches!(previews[0].status, RenameStatus::WillRename));
+
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn conflict_resolution_untangles_internal_collisions() {
+        let dir = temp_dir("resolve-internal");
+        let a = write_file(&dir, "a.txt", "1");
+        let b = write_file(&dir, "b.txt", "2");
+
+        let entry_a = FileEntry::from_path(a, 0).expect("entry a");
+        let entry_b = FileEntry::from_path(b, 0).expect("entry b");
+        let mut previews = vec![
+            RenamePreview {
+                file_id: entry_a.id,
+                original_name: entry_a.original_name.clone(),
+                new_name: "same.txt".to_string(),
+                new_path: dir.join("same.txt"),
+                status: RenameStatus::WillRename,
+                message: None,
+            },
+            RenamePreview {
+                file_id: entry_b.id,
+                original_name: entry_b.original_name.clone(),
+                new_name: "same.txt".to_string(),
+                new_path: dir.join("same.txt"),
+                status: RenameStatus::InternalConflict,
+                message: None,
+            },
+        ];
+
+        resolve_preview_conflicts(&mut previews, ConflictResolution::AppendCounter);
+
+        assert_eq!(previews[1].new_name, "same (1).txt");
+        assert!(matches!(previews[1].status, RenameStatus::WillRename));
+        assert_ne!(previews[0].new_path, previews[1].new_path);
+
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn conflict_resolution_can_skip_instead() {
+        let dir = temp_dir("resolve-skip");
+        write_file(&dir, "taken.txt", "existing");
+        let source = write_file(&dir, "source.txt", "content");
+
+        let entry = FileEntry::from_path(source, 0).expect("entry");
+        let mut previews = vec![RenamePreview {
+            file_id: entry.id,
+            original_name: entry.original_name.clone(),
+            new_name: "taken.txt".to_string(),
+            new_path: dir.join("taken.txt"),
+            status: RenameStatus::Conflict,
+            message: None,
+        }];
+
+        resolve_preview_conflicts(&mut previews, ConflictResolution::Skip);
+
+        assert!(matches!(previews[0].status, RenameStatus::Skipped));
+        assert_eq!(previews[0].new_name, "taken.txt", "a skipped name is untouched");
+
+        fs::remove_dir_all(dir).ok();
+    }
 }
-
-
-
