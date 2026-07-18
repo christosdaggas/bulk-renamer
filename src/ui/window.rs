@@ -3,8 +3,9 @@
 use crate::core::{AppSettings, FileEntry, RenameBatch, RenameConfig, RenamePreview, RenameStatus, RenameTarget};
 use crate::core::types::ThemePreference;
 use crate::engine::{RenameEngine, RenameValidator};
-use crate::presets::{Preset, PresetManager};
+use crate::presets::Preset;
 use crate::undo::{RenameLogEntry, RenameLogger, UndoManager, UndoResult};
+use super::util::{format_size, get_icon_for_extension, get_icon_for_filename};
 use async_channel;
 use libadwaita as adw;
 use adw::prelude::*;
@@ -119,7 +120,7 @@ impl RenamerWindow {
         menu_btn.add_css_class("flat");
 
         // Create custom popover with theme selector
-        let popover = self.create_main_menu_popover();
+        let popover = super::menu::build(self);
         menu_btn.set_popover(Some(&popover));
 
         header.pack_end(&menu_btn);
@@ -127,456 +128,6 @@ impl RenamerWindow {
         self.imp().rename_button.replace(Some(rename_btn));
 
         header
-    }
-
-    fn create_main_menu_popover(&self) -> gtk::Popover {
-        let popover = gtk::Popover::new();
-        popover.add_css_class("menu");
-
-        let main_box = gtk::Box::builder()
-            .orientation(gtk::Orientation::Vertical)
-            .spacing(0)
-            .width_request(280)
-            .build();
-
-        // Theme selector section
-        let theme_box = gtk::Box::builder()
-            .orientation(gtk::Orientation::Horizontal)
-            .spacing(18)
-            .halign(gtk::Align::Center)
-            .margin_top(18)
-            .margin_bottom(18)
-            .build();
-
-        // Create theme toggle buttons with larger circles and checkmarks
-        let default_btn = gtk::ToggleButton::new();
-        let light_btn = gtk::ToggleButton::new();
-        let dark_btn = gtk::ToggleButton::new();
-
-        // Helper to create theme button content with optional checkmark
-        fn create_theme_content(css_class: &str, is_selected: bool) -> gtk::Overlay {
-            let overlay = gtk::Overlay::new();
-            
-            let icon = gtk::Box::builder()
-                .width_request(44)
-                .height_request(44)
-                .build();
-            icon.add_css_class("theme-selector");
-            icon.add_css_class(css_class);
-            overlay.set_child(Some(&icon));
-            
-            if is_selected {
-                let check = gtk::Image::from_icon_name("object-select-symbolic");
-                check.add_css_class("theme-check");
-                check.set_halign(gtk::Align::Center);
-                check.set_valign(gtk::Align::Center);
-                overlay.add_overlay(&check);
-            }
-            
-            overlay
-        }
-
-        // Set initial content
-        default_btn.set_child(Some(&create_theme_content("theme-default", false)));
-        default_btn.set_tooltip_text(Some("System"));
-        default_btn.add_css_class("flat");
-        default_btn.add_css_class("circular");
-        default_btn.add_css_class("theme-button");
-
-        light_btn.set_child(Some(&create_theme_content("theme-light", false)));
-        light_btn.set_tooltip_text(Some("Light"));
-        light_btn.add_css_class("flat");
-        light_btn.add_css_class("circular");
-        light_btn.add_css_class("theme-button");
-
-        dark_btn.set_child(Some(&create_theme_content("theme-dark", false)));
-        dark_btn.set_tooltip_text(Some("Dark"));
-        dark_btn.add_css_class("flat");
-        dark_btn.add_css_class("circular");
-        dark_btn.add_css_class("theme-button");
-
-        // Group the toggle buttons
-        light_btn.set_group(Some(&default_btn));
-        dark_btn.set_group(Some(&default_btn));
-
-        // Set initial state based on current theme
-        let style_manager = adw::StyleManager::default();
-        // Update checkmark on active button based on current theme
-        let update_theme_buttons = |default: &gtk::ToggleButton, light: &gtk::ToggleButton, dark: &gtk::ToggleButton| {
-            let style_manager = adw::StyleManager::default();
-            let (def_sel, light_sel, dark_sel) = match style_manager.color_scheme() {
-                adw::ColorScheme::ForceLight => (false, true, false),
-                adw::ColorScheme::ForceDark => (false, false, true),
-                _ => (true, false, false),
-            };
-            default.set_child(Some(&create_theme_content("theme-default", def_sel)));
-            light.set_child(Some(&create_theme_content("theme-light", light_sel)));
-            dark.set_child(Some(&create_theme_content("theme-dark", dark_sel)));
-        };
-        
-        update_theme_buttons(&default_btn, &light_btn, &dark_btn);
-        
-        match style_manager.color_scheme() {
-            adw::ColorScheme::Default | adw::ColorScheme::PreferLight | adw::ColorScheme::PreferDark => {
-                default_btn.set_active(true);
-            }
-            adw::ColorScheme::ForceLight => {
-                light_btn.set_active(true);
-            }
-            adw::ColorScheme::ForceDark => {
-                dark_btn.set_active(true);
-            }
-            _ => {
-                default_btn.set_active(true);
-            }
-        }
-
-        // Connect theme button signals
-        let light_btn_clone = light_btn.clone();
-        let dark_btn_clone = dark_btn.clone();
-        default_btn.connect_toggled(clone!(
-            #[weak(rename_to = window)]
-            self,
-            move |btn| {
-                if btn.is_active() {
-                    window.set_theme(ThemePreference::System);
-                    btn.set_child(Some(&create_theme_content("theme-default", true)));
-                    light_btn_clone.set_child(Some(&create_theme_content("theme-light", false)));
-                    dark_btn_clone.set_child(Some(&create_theme_content("theme-dark", false)));
-                }
-            }
-        ));
-
-        let default_btn_clone = default_btn.clone();
-        let dark_btn_clone2 = dark_btn.clone();
-        light_btn.connect_toggled(clone!(
-            #[weak(rename_to = window)]
-            self,
-            move |btn| {
-                if btn.is_active() {
-                    window.set_theme(ThemePreference::Light);
-                    btn.set_child(Some(&create_theme_content("theme-light", true)));
-                    default_btn_clone.set_child(Some(&create_theme_content("theme-default", false)));
-                    dark_btn_clone2.set_child(Some(&create_theme_content("theme-dark", false)));
-                }
-            }
-        ));
-
-        let default_btn_clone2 = default_btn.clone();
-        let light_btn_clone2 = light_btn.clone();
-        dark_btn.connect_toggled(clone!(
-            #[weak(rename_to = window)]
-            self,
-            move |btn| {
-                if btn.is_active() {
-                    window.set_theme(ThemePreference::Dark);
-                    btn.set_child(Some(&create_theme_content("theme-dark", true)));
-                    default_btn_clone2.set_child(Some(&create_theme_content("theme-default", false)));
-                    light_btn_clone2.set_child(Some(&create_theme_content("theme-light", false)));
-                }
-            }
-        ));
-
-        theme_box.append(&default_btn);
-        theme_box.append(&light_btn);
-        theme_box.append(&dark_btn);
-        main_box.append(&theme_box);
-
-        // Separator
-        let sep1 = gtk::Separator::new(gtk::Orientation::Horizontal);
-        sep1.set_margin_start(12);
-        sep1.set_margin_end(12);
-        main_box.append(&sep1);
-
-        // Menu items
-        let menu_list = gtk::Box::builder()
-            .orientation(gtk::Orientation::Vertical)
-            .spacing(2)
-            .margin_top(6)
-            .margin_bottom(6)
-            .margin_start(6)
-            .margin_end(6)
-            .build();
-
-        // Presets row
-        let presets_row = gtk::Button::new();
-        let presets_content = gtk::Box::new(gtk::Orientation::Horizontal, 12);
-        presets_content.set_margin_start(6);
-        presets_content.set_margin_end(6);
-        presets_content.set_margin_top(8);
-        presets_content.set_margin_bottom(8);
-        let presets_icon = gtk::Image::from_icon_name("document-save-symbolic");
-        let presets_label = gtk::Label::new(Some("Presets"));
-        presets_label.set_halign(gtk::Align::Start);
-        presets_label.set_hexpand(true);
-        let presets_arrow = gtk::Image::from_icon_name("go-next-symbolic");
-        presets_content.append(&presets_icon);
-        presets_content.append(&presets_label);
-        presets_content.append(&presets_arrow);
-        presets_row.set_child(Some(&presets_content));
-        presets_row.add_css_class("flat");
-        presets_row.add_css_class("menu-item");
-        menu_list.append(&presets_row);
-
-        main_box.append(&menu_list);
-
-        // Separator
-        let sep2 = gtk::Separator::new(gtk::Orientation::Horizontal);
-        sep2.set_margin_start(12);
-        sep2.set_margin_end(12);
-        main_box.append(&sep2);
-
-        // Tools section
-        let tools_list = gtk::Box::builder()
-            .orientation(gtk::Orientation::Vertical)
-            .spacing(2)
-            .margin_top(6)
-            .margin_bottom(6)
-            .margin_start(6)
-            .margin_end(6)
-            .build();
-
-        // Import row
-        let import_row = gtk::Button::new();
-        let import_content = gtk::Box::new(gtk::Orientation::Horizontal, 12);
-        import_content.set_margin_start(6);
-        import_content.set_margin_end(6);
-        import_content.set_margin_top(8);
-        import_content.set_margin_bottom(8);
-        let import_icon = gtk::Image::from_icon_name("document-open-symbolic");
-        let import_label = gtk::Label::new(Some("Import from CSV…"));
-        import_label.set_halign(gtk::Align::Start);
-        import_label.set_hexpand(true);
-        import_content.append(&import_icon);
-        import_content.append(&import_label);
-        import_row.set_child(Some(&import_content));
-        import_row.add_css_class("flat");
-        import_row.add_css_class("menu-item");
-        tools_list.append(&import_row);
-
-        // Export row
-        let export_row = gtk::Button::new();
-        let export_content = gtk::Box::new(gtk::Orientation::Horizontal, 12);
-        export_content.set_margin_start(6);
-        export_content.set_margin_end(6);
-        export_content.set_margin_top(8);
-        export_content.set_margin_bottom(8);
-        let export_icon = gtk::Image::from_icon_name("document-save-as-symbolic");
-        let export_label = gtk::Label::new(Some("Export Log…"));
-        export_label.set_halign(gtk::Align::Start);
-        export_label.set_hexpand(true);
-        export_content.append(&export_icon);
-        export_content.append(&export_label);
-        export_row.set_child(Some(&export_content));
-        export_row.add_css_class("flat");
-        export_row.add_css_class("menu-item");
-        tools_list.append(&export_row);
-
-        // Undo row
-        let undo_row = gtk::Button::new();
-        let undo_content = gtk::Box::new(gtk::Orientation::Horizontal, 12);
-        undo_content.set_margin_start(6);
-        undo_content.set_margin_end(6);
-        undo_content.set_margin_top(8);
-        undo_content.set_margin_bottom(8);
-        let undo_icon = gtk::Image::from_icon_name("edit-undo-symbolic");
-        let undo_label = gtk::Label::new(Some("Undo Last Rename"));
-        undo_label.set_halign(gtk::Align::Start);
-        undo_label.set_hexpand(true);
-        undo_content.append(&undo_icon);
-        undo_content.append(&undo_label);
-        undo_row.set_child(Some(&undo_content));
-        undo_row.add_css_class("flat");
-        undo_row.add_css_class("menu-item");
-        tools_list.append(&undo_row);
-
-        // Redo row
-        let redo_row = gtk::Button::new();
-        let redo_content = gtk::Box::new(gtk::Orientation::Horizontal, 12);
-        redo_content.set_margin_start(6);
-        redo_content.set_margin_end(6);
-        redo_content.set_margin_top(8);
-        redo_content.set_margin_bottom(8);
-        let redo_icon = gtk::Image::from_icon_name("edit-redo-symbolic");
-        let redo_label = gtk::Label::new(Some("Redo Rename"));
-        redo_label.set_halign(gtk::Align::Start);
-        redo_label.set_hexpand(true);
-        redo_content.append(&redo_icon);
-        redo_content.append(&redo_label);
-        redo_row.set_child(Some(&redo_content));
-        redo_row.add_css_class("flat");
-        redo_row.add_css_class("menu-item");
-        tools_list.append(&redo_row);
-
-        // Preferences row
-        let preferences_row = gtk::Button::new();
-        let preferences_content = gtk::Box::new(gtk::Orientation::Horizontal, 12);
-        preferences_content.set_margin_start(6);
-        preferences_content.set_margin_end(6);
-        preferences_content.set_margin_top(8);
-        preferences_content.set_margin_bottom(8);
-        let preferences_icon = gtk::Image::from_icon_name("preferences-system-symbolic");
-        let preferences_label = gtk::Label::new(Some("Preferences"));
-        preferences_label.set_halign(gtk::Align::Start);
-        preferences_label.set_hexpand(true);
-        preferences_content.append(&preferences_icon);
-        preferences_content.append(&preferences_label);
-        preferences_row.set_child(Some(&preferences_content));
-        preferences_row.add_css_class("flat");
-        preferences_row.add_css_class("menu-item");
-        tools_list.append(&preferences_row);
-
-        main_box.append(&tools_list);
-
-        // Separator
-        let sep3 = gtk::Separator::new(gtk::Orientation::Horizontal);
-        sep3.set_margin_start(12);
-        sep3.set_margin_end(12);
-        main_box.append(&sep3);
-
-        // About section
-        let about_list = gtk::Box::builder()
-            .orientation(gtk::Orientation::Vertical)
-            .spacing(2)
-            .margin_top(6)
-            .margin_bottom(6)
-            .margin_start(6)
-            .margin_end(6)
-            .build();
-
-        // About row
-        let about_row = gtk::Button::new();
-        let about_content = gtk::Box::new(gtk::Orientation::Horizontal, 12);
-        about_content.set_margin_start(6);
-        about_content.set_margin_end(6);
-        about_content.set_margin_top(8);
-        about_content.set_margin_bottom(8);
-        let about_icon = gtk::Image::from_icon_name("help-about-symbolic");
-        let about_label = gtk::Label::new(Some("About"));
-        about_label.set_halign(gtk::Align::Start);
-        about_label.set_hexpand(true);
-        about_content.append(&about_icon);
-        about_content.append(&about_label);
-        about_row.set_child(Some(&about_content));
-        about_row.add_css_class("flat");
-        about_row.add_css_class("menu-item");
-        about_list.append(&about_row);
-
-        main_box.append(&about_list);
-
-        // Connect button click events
-        let popover_weak = popover.downgrade();
-        presets_row.connect_clicked(clone!(
-            #[weak(rename_to = window)]
-            self,
-            move |_| {
-                if let Some(pop) = popover_weak.upgrade() {
-                    pop.popdown();
-                }
-                window.show_presets_submenu();
-            }
-        ));
-
-        let popover_weak = popover.downgrade();
-        import_row.connect_clicked(clone!(
-            #[weak(rename_to = window)]
-            self,
-            move |_| {
-                if let Some(pop) = popover_weak.upgrade() {
-                    pop.popdown();
-                }
-                window.show_import_csv_dialog();
-            }
-        ));
-
-        let popover_weak = popover.downgrade();
-        export_row.connect_clicked(clone!(
-            #[weak(rename_to = window)]
-            self,
-            move |_| {
-                if let Some(pop) = popover_weak.upgrade() {
-                    pop.popdown();
-                }
-                window.show_export_log_dialog();
-            }
-        ));
-
-        let popover_weak = popover.downgrade();
-        undo_row.connect_clicked(clone!(
-            #[weak(rename_to = window)]
-            self,
-            move |_| {
-                if let Some(pop) = popover_weak.upgrade() {
-                    pop.popdown();
-                }
-                window.undo_last_batch();
-            }
-        ));
-
-        let popover_weak = popover.downgrade();
-        redo_row.connect_clicked(clone!(
-            #[weak(rename_to = window)]
-            self,
-            move |_| {
-                if let Some(pop) = popover_weak.upgrade() {
-                    pop.popdown();
-                }
-                window.redo_last_batch();
-            }
-        ));
-
-        let popover_weak = popover.downgrade();
-        preferences_row.connect_clicked(clone!(
-            #[weak(rename_to = window)]
-            self,
-            move |_| {
-                if let Some(pop) = popover_weak.upgrade() {
-                    pop.popdown();
-                }
-                window.show_preferences_dialog();
-            }
-        ));
-
-        let popover_weak = popover.downgrade();
-        about_row.connect_clicked(clone!(
-            #[weak(rename_to = window)]
-            self,
-            move |_| {
-                if let Some(pop) = popover_weak.upgrade() {
-                    pop.popdown();
-                }
-                window.show_about_dialog();
-            }
-        ));
-
-        popover.set_child(Some(&main_box));
-        popover
-    }
-
-    fn show_presets_submenu(&self) {
-        let dialog = adw::MessageDialog::new(
-            Some(self),
-            Some("Presets"),
-            Some("Choose an action:"),
-        );
-        dialog.add_response("cancel", "Cancel");
-        dialog.add_response("save", "Save Preset…");
-        dialog.add_response("load", "Load Preset…");
-        dialog.set_response_appearance("save", adw::ResponseAppearance::Suggested);
-
-        dialog.connect_response(None, clone!(
-            #[weak(rename_to = window)]
-            self,
-            move |_, response| {
-                match response {
-                    "save" => window.show_save_preset_dialog(),
-                    "load" => window.show_load_preset_dialog(),
-                    _ => {}
-                }
-            }
-        ));
-
-        dialog.present();
     }
 
     fn show_about_dialog(&self) {
@@ -1285,7 +836,7 @@ impl RenamerWindow {
         self.save_settings();
     }
 
-    fn set_theme(&self, theme: ThemePreference) {
+    pub(crate) fn set_theme(&self, theme: ThemePreference) {
         let style_manager = adw::StyleManager::default();
         match theme {
             ThemePreference::System => style_manager.set_color_scheme(adw::ColorScheme::Default),
@@ -1681,7 +1232,7 @@ impl RenamerWindow {
         }
     }
 
-    fn handle_rename_result(&self, result: crate::engine::RenameBatchResult) {
+    pub(crate) fn handle_rename_result(&self, result: crate::engine::RenameBatchResult) {
         let success_count = result.success_count();
         let error_count = result.failure_count();
 
@@ -1774,7 +1325,7 @@ impl RenamerWindow {
         }
     }
 
-    fn show_info_dialog(&self, title: &str, message: &str) {
+    pub(crate) fn show_info_dialog(&self, title: &str, message: &str) {
         let dialog = adw::MessageDialog::new(Some(self), Some(title), Some(message));
         dialog.add_response("ok", "OK");
         dialog.set_default_response(Some("ok"));
@@ -1851,129 +1402,31 @@ impl RenamerWindow {
     }
 
     fn show_preferences_dialog(&self) {
-        let settings = self.imp().settings.borrow().clone();
-        let dialog = adw::Window::builder()
-            .title("Preferences")
-            .default_width(520)
-            .default_height(520)
-            .modal(true)
-            .transient_for(self)
-            .build();
+        super::preferences_dialog::show(self);
+    }
 
-        let toolbar_view = adw::ToolbarView::new();
-        let header = adw::HeaderBar::new();
-        let cancel_btn = gtk::Button::with_label("Cancel");
-        cancel_btn.add_css_class("flat");
-        let save_btn = gtk::Button::with_label("Save");
-        save_btn.add_css_class("suggested-action");
-        header.pack_start(&cancel_btn);
-        header.pack_end(&save_btn);
-        toolbar_view.add_top_bar(&header);
+    /// Snapshot of the current settings, for dialogs.
+    pub(crate) fn settings_snapshot(&self) -> AppSettings {
+        self.imp().settings.borrow().clone()
+    }
 
-        let page = adw::PreferencesPage::new();
-
-        let behavior = adw::PreferencesGroup::builder()
-            .title("Behavior")
-            .build();
-        let confirm_row = adw::SwitchRow::builder()
-            .title("Confirm Before Rename")
-            .active(settings.confirm_before_rename)
-            .build();
-        let live_preview_row = adw::SwitchRow::builder()
-            .title("Live Preview")
-            .active(settings.live_preview)
-            .build();
-        let show_unchanged_row = adw::SwitchRow::builder()
-            .title("Show Unchanged Files")
-            .active(settings.show_unchanged_files)
-            .build();
-        behavior.add(&confirm_row);
-        behavior.add(&live_preview_row);
-        behavior.add(&show_unchanged_row);
-        page.add(&behavior);
-
-        let files = adw::PreferencesGroup::builder()
-            .title("Files")
-            .build();
-        let hidden_row = adw::SwitchRow::builder()
-            .title("Include Hidden Files")
-            .active(settings.show_hidden_files)
-            .build();
-        let symlink_row = adw::SwitchRow::builder()
-            .title("Follow Symlinks")
-            .active(settings.follow_symlinks)
-            .build();
-        let metadata_row = adw::SwitchRow::builder()
-            .title("Load Metadata")
-            .active(settings.metadata_loading_enabled)
-            .build();
-        let depth_row = adw::SpinRow::builder()
-            .title("Folder Scan Depth")
-            .adjustment(&gtk::Adjustment::new(
-                settings.recursive_folder_depth as f64,
-                1.0,
-                100.0,
-                1.0,
-                5.0,
-                0.0,
-            ))
-            .build();
-        files.add(&hidden_row);
-        files.add(&symlink_row);
-        files.add(&metadata_row);
-        files.add(&depth_row);
-        page.add(&files);
-
-        let history = adw::PreferencesGroup::builder()
-            .title("History and Logs")
-            .build();
-        let undo_row = adw::SwitchRow::builder()
-            .title("Persist Undo History")
-            .active(settings.undo_persistence_enabled)
-            .build();
-        let log_row = adw::SwitchRow::builder()
-            .title("Log Rename Operations")
-            .active(settings.log_operations)
-            .build();
-        history.add(&undo_row);
-        history.add(&log_row);
-        page.add(&history);
-
-        toolbar_view.set_content(Some(&page));
-        dialog.set_content(Some(&toolbar_view));
-
-        let dialog_clone = dialog.clone();
-        cancel_btn.connect_clicked(move |_| {
-            dialog_clone.close();
-        });
-
-        let dialog_clone = dialog.clone();
-        let window = self.clone();
-        save_btn.connect_clicked(move |_| {
-            {
-                let mut settings = window.imp().settings.borrow_mut();
-                settings.confirm_before_rename = confirm_row.is_active();
-                settings.live_preview = live_preview_row.is_active();
-                settings.show_unchanged_files = show_unchanged_row.is_active();
-                settings.show_hidden_files = hidden_row.is_active();
-                settings.follow_symlinks = symlink_row.is_active();
-                settings.metadata_loading_enabled = metadata_row.is_active();
-                settings.recursive_folder_depth = depth_row.value() as usize;
-                settings.undo_persistence_enabled = undo_row.is_active();
-                settings.log_operations = log_row.is_active();
-            }
-            window.imp().logger.borrow_mut().set_enabled(log_row.is_active());
-            window.save_settings();
-            window.update_preview();
-            dialog_clone.close();
-        });
-
-        dialog.present();
+    /// Mutate the settings, then persist them and refresh everything they affect.
+    pub(crate) fn update_settings(&self, apply: impl FnOnce(&mut AppSettings)) {
+        {
+            let mut settings = self.imp().settings.borrow_mut();
+            apply(&mut settings);
+        }
+        let log_enabled = self.imp().settings.borrow().log_operations;
+        self.imp().logger.borrow_mut().set_enabled(log_enabled);
+        self.save_settings();
+        self.update_preview();
     }
 
     // ============ Rule Dialogs ============
 
-    fn show_add_rule_dialog(&self, rules_list: &gtk::ListBox) {
+    fn show_add_rule_dialog(&self, _rules_list: &gtk::ListBox) {
+        use super::rule_dialogs::RuleKind;
+
         let dialog = adw::MessageDialog::new(
             Some(self),
             Some("Add Rule"),
@@ -1985,236 +1438,180 @@ impl RenamerWindow {
             .css_classes(vec!["boxed-list"])
             .build();
 
-        let rule_types = [
-            ("edit-find-replace-symbolic", "Replace Text", "Find and replace text"),
-            ("format-text-rich-symbolic", "Change Case", "UPPER, lower, Title Case"),
-            ("insert-text-symbolic", "Insert Text", "Add text at position"),
-            ("edit-delete-symbolic", "Remove Text", "Remove characters or patterns"),
-            ("view-list-ordered-symbolic", "Numbering", "Add sequential numbers"),
-            ("x-office-calendar-symbolic", "Date/Time", "Insert date information"),
-        ];
-
-        for (icon, name, desc) in &rule_types {
+        for (_, icon, name, desc) in RuleKind::catalog() {
             let row = adw::ActionRow::builder()
                 .title(*name)
                 .subtitle(*desc)
                 .activatable(true)
                 .build();
-            
-            let icon_widget = gtk::Image::from_icon_name(*icon);
-            row.add_prefix(&icon_widget);
+            row.add_prefix(&gtk::Image::from_icon_name(icon));
             row.add_suffix(&gtk::Image::from_icon_name("go-next-symbolic"));
-            
             list.append(&row);
         }
 
-        dialog.set_extra_child(Some(&list));
+        let scroll = gtk::ScrolledWindow::builder()
+            .max_content_height(420)
+            .propagate_natural_height(true)
+            .child(&list)
+            .build();
+        dialog.set_extra_child(Some(&scroll));
         dialog.add_response("cancel", "Cancel");
         dialog.present();
 
-        // Handle selection
-        let rules_list_clone = rules_list.clone();
         let dialog_clone = dialog.clone();
         list.connect_row_activated(clone!(
             #[weak(rename_to = window)]
             self,
             move |_, row| {
-                let index = row.index();
+                let index = row.index() as usize;
                 dialog_clone.close();
-                window.show_rule_config_dialog(index as usize, &rules_list_clone);
+                if let Some((kind, ..)) = RuleKind::catalog().get(index) {
+                    super::rule_dialogs::open(&window, *kind, None);
+                }
             }
         ));
     }
 
-    fn show_rule_config_dialog(&self, rule_type: usize, rules_list: &gtk::ListBox) {
-        match rule_type {
-            0 => self.show_replace_config_dialog(rules_list),
-            1 => self.show_case_config_dialog(rules_list),
-            2 => self.show_insert_config_dialog(rules_list),
-            3 => self.show_remove_config_dialog(rules_list),
-            4 => self.show_numbering_config_dialog(rules_list),
-            5 => self.show_datetime_config_dialog(rules_list),
-            _ => {}
+    /// Read a rule back for the edit dialogs.
+    pub(crate) fn rule_at(&self, index: usize) -> Option<crate::core::RenameRule> {
+        self.imp().config.borrow().rules.get(index).cloned()
+    }
+
+    /// Insert or replace a rule, rebuild the rules list, refresh the preview.
+    /// Editing preserves the rule's id and enabled flag.
+    pub(crate) fn commit_rule(&self, rule_type: crate::core::RuleType, edit_index: Option<usize>) {
+        {
+            let mut config = self.imp().config.borrow_mut();
+            match edit_index {
+                Some(idx) if idx < config.rules.len() => {
+                    config.rules[idx].rule_type = rule_type;
+                }
+                _ => config.rules.push(crate::core::RenameRule::new(rule_type)),
+            }
         }
-    }
-
-    fn show_replace_config_dialog(&self, rules_list: &gtk::ListBox) {
-        let dialog = adw::Window::builder()
-            .title("Replace Text")
-            .default_width(400)
-            .default_height(380)
-            .modal(true)
-            .transient_for(self)
-            .build();
-
-        let toolbar_view = adw::ToolbarView::new();
-        
-        let header = adw::HeaderBar::new();
-        header.set_show_end_title_buttons(false);
-        header.set_show_start_title_buttons(false);
-        
-        let cancel_btn = gtk::Button::with_label("Cancel");
-        cancel_btn.add_css_class("flat");
-        let add_btn = gtk::Button::with_label("Add Rule");
-        add_btn.add_css_class("suggested-action");
-        
-        header.pack_start(&cancel_btn);
-        header.pack_end(&add_btn);
-        toolbar_view.add_top_bar(&header);
-
-        let content = gtk::Box::builder()
-            .orientation(gtk::Orientation::Vertical)
-            .margin_start(24)
-            .margin_end(24)
-            .margin_top(12)
-            .margin_bottom(24)
-            .spacing(18)
-            .build();
-
-        // Find field
-        let find_group = adw::PreferencesGroup::new();
-        let find_entry = adw::EntryRow::builder()
-            .title("Find")
-            .build();
-        find_group.add(&find_entry);
-        content.append(&find_group);
-
-        // Replace field
-        let replace_group = adw::PreferencesGroup::new();
-        let replace_entry = adw::EntryRow::builder()
-            .title("Replace with")
-            .build();
-        replace_group.add(&replace_entry);
-        content.append(&replace_group);
-
-        // Options
-        let options_group = adw::PreferencesGroup::builder()
-            .title("Options")
-            .build();
-        
-        let case_sensitive = adw::SwitchRow::builder()
-            .title("Case sensitive")
-            .active(true)
-            .build();
-        options_group.add(&case_sensitive);
-        
-        let use_regex = adw::SwitchRow::builder()
-            .title("Use regular expressions")
-            .active(false)
-            .build();
-        options_group.add(&use_regex);
-        
-        let replace_all = adw::SwitchRow::builder()
-            .title("Replace all occurrences")
-            .active(true)
-            .build();
-        options_group.add(&replace_all);
-
-        content.append(&options_group);
-        toolbar_view.set_content(Some(&content));
-        dialog.set_content(Some(&toolbar_view));
-
-        // Connect buttons
-        let dialog_clone = dialog.clone();
-        cancel_btn.connect_clicked(move |_| {
-            dialog_clone.close();
-        });
-
-        let dialog_clone = dialog.clone();
-        let rules_list_clone = rules_list.clone();
-        let window = self.clone();
-        add_btn.connect_clicked(move |_| {
-            let find_text = find_entry.text().to_string();
-            let replace_text = replace_entry.text().to_string();
-            let is_case_sensitive = case_sensitive.is_active();
-            let is_regex = use_regex.is_active();
-            let is_replace_all = replace_all.is_active();
-
-            if !find_text.is_empty() {
-                window.add_replace_rule(
-                    &rules_list_clone,
-                    find_text,
-                    replace_text,
-                    is_case_sensitive,
-                    is_regex,
-                    is_replace_all,
-                );
-            }
-            dialog_clone.close();
-        });
-
-        dialog.present();
-    }
-
-    fn add_replace_rule(
-        &self,
-        rules_list: &gtk::ListBox,
-        find: String,
-        replace: String,
-        case_sensitive: bool,
-        use_regex: bool,
-        replace_all: bool,
-    ) {
-        self.add_replace_rule_at(rules_list, find, replace, case_sensitive, use_regex, replace_all, None);
-    }
-
-    fn add_replace_rule_at(
-        &self,
-        rules_list: &gtk::ListBox,
-        find: String,
-        replace: String,
-        case_sensitive: bool,
-        use_regex: bool,
-        replace_all: bool,
-        edit_index: Option<usize>,
-    ) {
-        use crate::core::{RenameRule, RuleType, ReplaceRule};
-
-        let rule = RenameRule::new(RuleType::Replace(ReplaceRule {
-            find: find.clone(),
-            replace: replace.clone(),
-            use_regex,
-            case_sensitive,
-            replace_all,
-            include_extension: false,
-        }));
-
-        let rule_index = if let Some(idx) = edit_index {
-            // Update existing rule
-            self.imp().config.borrow_mut().rules[idx] = rule;
-            idx
-        } else {
-            // Add new rule
-            self.imp().config.borrow_mut().rules.push(rule);
-            self.imp().config.borrow().rules.len() - 1
-        };
-
-        // Create UI row
-        let subtitle = if replace.is_empty() {
-            format!("Remove \"{}\"", find)
-        } else {
-            format!("\"{}\" → \"{}\"", find, replace)
-        };
-
-        let row = self.create_rule_row(
-            "Replace",
-            &subtitle,
-            "edit-find-replace-symbolic",
-            rule_index,
-            rules_list,
-        );
-
-        if edit_index.is_some() {
-            // Remove old row and insert new one at same position
-            if let Some(old_row) = rules_list.row_at_index(rule_index as i32) {
-                let position = old_row.index();
-                rules_list.remove(&old_row);
-                rules_list.insert(&row, position);
-            }
-        } else {
-            rules_list.append(&row);
+        if let Some(rules_list) = self.imp().rules_list.borrow().as_ref() {
+            self.rebuild_rules_list(rules_list);
         }
         self.update_preview();
+    }
+
+    // Thin rule builders kept for the quick-rule actions and the widget tests;
+    // the dialogs go through rule_dialogs::open and commit_rule directly.
+
+    #[cfg(test)]
+    fn add_replace_rule(
+        &self,
+        _rules_list: &gtk::ListBox,
+        find: String,
+        replace: String,
+        case_sensitive: bool,
+        use_regex: bool,
+        replace_all: bool,
+    ) {
+        use crate::core::{ReplaceRule, RuleType};
+        self.commit_rule(
+            RuleType::Replace(ReplaceRule {
+                find,
+                replace,
+                use_regex,
+                case_sensitive,
+                replace_all,
+                include_extension: false,
+            }),
+            None,
+        );
+    }
+
+    fn add_case_rule_at(&self, _rules_list: &gtk::ListBox, case_type_idx: usize, edit_index: Option<usize>) {
+        use crate::core::{CaseRule, CaseType, RuleType};
+        // Index order matches the CaseType enum, which the quick actions cast.
+        let case_type = match case_type_idx {
+            0 => CaseType::Lower,
+            1 => CaseType::Upper,
+            2 => CaseType::Title,
+            3 => CaseType::Sentence,
+            _ => CaseType::Lower,
+        };
+        self.commit_rule(
+            RuleType::ChangeCase(CaseRule {
+                case_type,
+                include_extension: false,
+            }),
+            edit_index,
+        );
+    }
+
+    fn add_numbering_rule_at(
+        &self,
+        _rules_list: &gtk::ListBox,
+        start: i64,
+        increment: i64,
+        padding: usize,
+        position: usize,
+        separator: String,
+        edit_index: Option<usize>,
+    ) {
+        use crate::core::{InsertPosition, NumberFormat, NumberingRule, RuleType};
+        let (insert_pos, prefix, suffix) = if position == 0 {
+            (InsertPosition::Prefix, String::new(), separator)
+        } else {
+            (InsertPosition::Suffix, separator, String::new())
+        };
+        self.commit_rule(
+            RuleType::Numbering(NumberingRule {
+                start,
+                increment,
+                padding,
+                position: insert_pos,
+                prefix,
+                suffix,
+                reset_per_folder: false,
+                format: NumberFormat::Decimal,
+            }),
+            edit_index,
+        );
+    }
+
+    #[cfg(test)]
+    fn add_datetime_rule(&self, rules_list: &gtk::ListBox, source: usize, format: usize, position: usize) {
+        self.add_datetime_rule_at(rules_list, source, format, position, None);
+    }
+
+    #[cfg(test)]
+    fn add_datetime_rule_at(
+        &self,
+        _rules_list: &gtk::ListBox,
+        source: usize,
+        format: usize,
+        position: usize,
+        edit_index: Option<usize>,
+    ) {
+        use crate::core::{DateSource, InsertPosition, InsertRule, InsertText, RuleType};
+
+        let formats = ["%Y-%m-%d", "%Y%m%d", "%d-%m-%Y", "%b %d, %Y", "%Y-%m-%d_%H-%M-%S"];
+        let format_str = formats.get(format).unwrap_or(&"%Y-%m-%d").to_string();
+        let date_source = match source {
+            0 => DateSource::Modified,
+            1 => DateSource::Created,
+            2 => DateSource::Now,
+            3 => DateSource::ExifDateTaken,
+            _ => DateSource::Modified,
+        };
+        let insert_pos = if position == 0 {
+            InsertPosition::Prefix
+        } else {
+            InsertPosition::Suffix
+        };
+        self.commit_rule(
+            RuleType::Insert(InsertRule {
+                text: InsertText::FileDate {
+                    source: date_source,
+                    format: format_str,
+                },
+                position: insert_pos,
+            }),
+            edit_index,
+        );
     }
 
     fn create_rule_row(
@@ -2237,6 +1634,7 @@ impl RenamerWindow {
         // Drag handle
         let drag_handle = gtk::Image::from_icon_name("list-drag-handle-symbolic");
         drag_handle.add_css_class("dim-label");
+        drag_handle.add_css_class("drag-handle");
         drag_handle.set_tooltip_text(Some("Drag to reorder"));
         row_box.append(&drag_handle);
 
@@ -2298,7 +1696,7 @@ impl RenamerWindow {
         // Setup drag source
         let drag_source = gtk::DragSource::new();
         drag_source.set_actions(gtk::gdk::DragAction::MOVE);
-        
+
         let row_weak = row.downgrade();
         drag_source.connect_prepare(move |_source, _x, _y| {
             if let Some(row) = row_weak.upgrade() {
@@ -2327,7 +1725,7 @@ impl RenamerWindow {
 
         // Setup drop target
         let drop_target = gtk::DropTarget::new(i32::static_type(), gtk::gdk::DragAction::MOVE);
-        
+
         let rules_list_weak = rules_list.downgrade();
         let window_weak = self.downgrade();
         drop_target.connect_drop(move |_target, value, _x, _y| {
@@ -2414,1608 +1812,37 @@ impl RenamerWindow {
     }
 
     fn get_rule_display_info(&self, rule: &crate::core::RenameRule) -> (String, String, String) {
-        use crate::core::RuleType;
-        
-        match &rule.rule_type {
-            RuleType::Replace(r) => {
-                let subtitle = if r.replace.is_empty() {
-                    format!("Remove \"{}\"", r.find)
-                } else {
-                    format!("\"{}\" → \"{}\"", r.find, r.replace)
-                };
-                ("Replace".to_string(), subtitle, "edit-find-replace-symbolic".to_string())
-            }
-            RuleType::ChangeCase(c) => {
-                let case_name = match c.case_type {
-                    crate::core::CaseType::Lower => "lowercase",
-                    crate::core::CaseType::Upper => "UPPERCASE",
-                    crate::core::CaseType::Title => "Title Case",
-                    crate::core::CaseType::Sentence => "Sentence case",
-                    crate::core::CaseType::Snake => "snake_case",
-                    crate::core::CaseType::Kebab => "kebab-case",
-                    _ => "Unknown",
-                };
-                ("Change Case".to_string(), case_name.to_string(), "format-text-rich-symbolic".to_string())
-            }
-            // Date/Time rules are Insert rules under the hood, but they get their own
-            // row so that rebuild_rules_list reproduces what add_datetime_rule built.
-            RuleType::Insert(i) if matches!(i.text, crate::core::InsertText::FileDate { .. }) => {
-                ("Date/Time".to_string(), Self::datetime_subtitle(i), "x-office-calendar-symbolic".to_string())
-            }
-            RuleType::Insert(i) => {
-                let text = match &i.text {
-                    crate::core::InsertText::Fixed(t) => t.clone(),
-                    _ => "Dynamic".to_string(),
-                };
-                let pos = match &i.position {
-                    crate::core::InsertPosition::Prefix => "at beginning",
-                    crate::core::InsertPosition::Suffix => "at end",
-                    crate::core::InsertPosition::Position(p) => &format!("at position {}", p),
-                    _ => "custom",
-                };
-                ("Insert".to_string(), format!("\"{}\" {}", text, pos), "insert-text-symbolic".to_string())
-            }
-            RuleType::Remove(r) => {
-                let subtitle = match &r.target {
-                    crate::core::RemoveTarget::Text { text, .. } => format!("\"{}\"", text),
-                    crate::core::RemoveTarget::FirstN(n) => format!("First {} chars", n),
-                    crate::core::RemoveTarget::LastN(n) => format!("Last {} chars", n),
-                    crate::core::RemoveTarget::Digits => "All digits".to_string(),
-                    crate::core::RemoveTarget::Whitespace => "All whitespace".to_string(),
-                    crate::core::RemoveTarget::Bracketed(_) => "Bracketed content".to_string(),
-                    _ => "Custom".to_string(),
-                };
-                ("Remove".to_string(), subtitle, "edit-delete-symbolic".to_string())
-            }
-            RuleType::Numbering(n) => {
-                let pos = match &n.position {
-                    crate::core::InsertPosition::Prefix => "prefix",
-                    crate::core::InsertPosition::Suffix => "suffix",
-                    _ => "custom",
-                };
-                ("Numbering".to_string(), format!("Start: {}, Pad: {} digits, {}", n.start, n.padding, pos), "view-list-ordered-symbolic".to_string())
-            }
-            _ => ("Rule".to_string(), "Custom rule".to_string(), "emblem-system-symbolic".to_string())
-        }
+        super::rule_dialogs::rule_summary(&rule.rule_type)
     }
 
-    fn edit_rule_at_index(&self, index: usize, rules_list: &gtk::ListBox) {
-        use crate::core::RuleType;
-        
-        let rules = self.imp().config.borrow();
-        if index >= rules.rules.len() {
-            return;
-        }
-        let rule = rules.rules[index].clone();
-        drop(rules);
-
-        match &rule.rule_type {
-            RuleType::Replace(r) => {
-                self.show_replace_edit_dialog(rules_list, index, r.clone());
-            }
-            RuleType::ChangeCase(c) => {
-                self.show_case_edit_dialog(rules_list, index, c.clone());
-            }
-            RuleType::Insert(i) if matches!(i.text, crate::core::InsertText::FileDate { .. }) => {
-                self.show_datetime_edit_dialog(rules_list, index, i.clone());
-            }
-            RuleType::Insert(i) => {
-                self.show_insert_edit_dialog(rules_list, index, i.clone());
-            }
-            RuleType::Remove(r) => {
-                self.show_remove_edit_dialog(rules_list, index, r.clone());
-            }
-            RuleType::Numbering(n) => {
-                self.show_numbering_edit_dialog(rules_list, index, n.clone());
-            }
-            _ => {}
-        }
+    fn edit_rule_at_index(&self, index: usize, _rules_list: &gtk::ListBox) {
+        use super::rule_dialogs::RuleKind;
+        let Some(rule) = self.rule_at(index) else { return };
+        super::rule_dialogs::open(self, RuleKind::of(&rule.rule_type), Some(index));
     }
 
-    fn show_replace_edit_dialog(&self, rules_list: &gtk::ListBox, edit_index: usize, existing: crate::core::ReplaceRule) {
-        let dialog = adw::Window::builder()
-            .title("Edit Replace Rule")
-            .default_width(400)
-            .default_height(380)
-            .modal(true)
-            .transient_for(self)
-            .build();
-
-        let toolbar_view = adw::ToolbarView::new();
-        
-        let header = adw::HeaderBar::new();
-        header.set_show_end_title_buttons(false);
-        header.set_show_start_title_buttons(false);
-        
-        let cancel_btn = gtk::Button::with_label("Cancel");
-        cancel_btn.add_css_class("flat");
-        let save_btn = gtk::Button::with_label("Save");
-        save_btn.add_css_class("suggested-action");
-        
-        header.pack_start(&cancel_btn);
-        header.pack_end(&save_btn);
-        toolbar_view.add_top_bar(&header);
-
-        let content = gtk::Box::builder()
-            .orientation(gtk::Orientation::Vertical)
-            .margin_start(24)
-            .margin_end(24)
-            .margin_top(12)
-            .margin_bottom(24)
-            .spacing(18)
-            .build();
-
-        let find_group = adw::PreferencesGroup::new();
-        let find_entry = adw::EntryRow::builder()
-            .title("Find")
-            .text(&existing.find)
-            .build();
-        find_group.add(&find_entry);
-        content.append(&find_group);
-
-        let replace_group = adw::PreferencesGroup::new();
-        let replace_entry = adw::EntryRow::builder()
-            .title("Replace with")
-            .text(&existing.replace)
-            .build();
-        replace_group.add(&replace_entry);
-        content.append(&replace_group);
-
-        let options_group = adw::PreferencesGroup::builder()
-            .title("Options")
-            .build();
-        
-        let case_sensitive = adw::SwitchRow::builder()
-            .title("Case sensitive")
-            .active(existing.case_sensitive)
-            .build();
-        options_group.add(&case_sensitive);
-        
-        let use_regex = adw::SwitchRow::builder()
-            .title("Use regular expressions")
-            .active(existing.use_regex)
-            .build();
-        options_group.add(&use_regex);
-        
-        let replace_all = adw::SwitchRow::builder()
-            .title("Replace all occurrences")
-            .active(existing.replace_all)
-            .build();
-        options_group.add(&replace_all);
-
-        content.append(&options_group);
-        toolbar_view.set_content(Some(&content));
-        dialog.set_content(Some(&toolbar_view));
-
-        let dialog_clone = dialog.clone();
-        cancel_btn.connect_clicked(move |_| {
-            dialog_clone.close();
-        });
-
-        let dialog_clone = dialog.clone();
-        let rules_list_clone = rules_list.clone();
-        let window = self.clone();
-        save_btn.connect_clicked(move |_| {
-            let find_text = find_entry.text().to_string();
-            let replace_text = replace_entry.text().to_string();
-
-            if !find_text.is_empty() {
-                window.add_replace_rule_at(
-                    &rules_list_clone,
-                    find_text,
-                    replace_text,
-                    case_sensitive.is_active(),
-                    use_regex.is_active(),
-                    replace_all.is_active(),
-                    Some(edit_index),
-                );
-            }
-            dialog_clone.close();
-        });
-
-        dialog.present();
-    }
-
-    fn show_case_config_dialog(&self, rules_list: &gtk::ListBox) {
-        let dialog = adw::Window::builder()
-            .title("Change Case")
-            .default_width(400)
-            .default_height(400)
-            .modal(true)
-            .transient_for(self)
-            .build();
-
-        let toolbar_view = adw::ToolbarView::new();
-        
-        let header = adw::HeaderBar::new();
-        header.set_show_end_title_buttons(false);
-        header.set_show_start_title_buttons(false);
-        
-        let cancel_btn = gtk::Button::with_label("Cancel");
-        cancel_btn.add_css_class("flat");
-        let add_btn = gtk::Button::with_label("Add Rule");
-        add_btn.add_css_class("suggested-action");
-        
-        header.pack_start(&cancel_btn);
-        header.pack_end(&add_btn);
-        toolbar_view.add_top_bar(&header);
-
-        let content = gtk::Box::builder()
-            .orientation(gtk::Orientation::Vertical)
-            .margin_start(24)
-            .margin_end(24)
-            .margin_top(12)
-            .margin_bottom(24)
-            .spacing(12)
-            .build();
-
-        let group = adw::PreferencesGroup::builder()
-            .title("Case Type")
-            .build();
-
-        let case_types = [
-            ("lowercase", "All letters become lowercase"),
-            ("UPPERCASE", "All letters become uppercase"),
-            ("Title Case", "First letter of each word uppercase"),
-            ("Sentence case", "First letter uppercase, rest lowercase"),
-            ("snake_case", "Words joined with underscores"),
-            ("kebab-case", "Words joined with hyphens"),
-        ];
-
-        let case_dropdown = adw::ComboRow::builder()
-            .title("Convert to")
-            .model(&gtk::StringList::new(&case_types.map(|(name, _)| name)))
-            .build();
-        group.add(&case_dropdown);
-
-        // Description label
-        let desc_label = gtk::Label::builder()
-            .label(case_types[0].1)
-            .css_classes(vec!["dim-label", "caption"])
-            .xalign(0.0)
-            .margin_top(6)
-            .build();
-
-        case_dropdown.connect_selected_notify(clone!(
-            #[weak]
-            desc_label,
-            move |dropdown| {
-                let idx = dropdown.selected() as usize;
-                if idx < case_types.len() {
-                    desc_label.set_label(case_types[idx].1);
-                }
-            }
-        ));
-
-        content.append(&group);
-        content.append(&desc_label);
-
-        toolbar_view.set_content(Some(&content));
-        dialog.set_content(Some(&toolbar_view));
-
-        let dialog_clone = dialog.clone();
-        cancel_btn.connect_clicked(move |_| {
-            dialog_clone.close();
-        });
-
-        let dialog_clone = dialog.clone();
-        let rules_list_clone = rules_list.clone();
-        let window = self.clone();
-        add_btn.connect_clicked(move |_| {
-            let case_idx = case_dropdown.selected() as usize;
-            window.add_case_rule(&rules_list_clone, case_idx);
-            dialog_clone.close();
-        });
-
-        dialog.present();
-    }
-
-    fn add_case_rule(&self, rules_list: &gtk::ListBox, case_type_idx: usize) {
-        self.add_case_rule_at(rules_list, case_type_idx, None);
-    }
-
-    fn add_case_rule_at(&self, rules_list: &gtk::ListBox, case_type_idx: usize, edit_index: Option<usize>) {
-        use crate::core::{RenameRule, RuleType, CaseRule, CaseType};
-
-        let case_type = match case_type_idx {
-            0 => CaseType::Lower,
-            1 => CaseType::Upper,
-            2 => CaseType::Title,
-            3 => CaseType::Sentence,
-            4 => CaseType::Snake,
-            5 => CaseType::Kebab,
-            _ => CaseType::Lower,
-        };
-
-        let case_names = ["lowercase", "UPPERCASE", "Title Case", "Sentence case", "snake_case", "kebab-case"];
-
-        let rule = RenameRule::new(RuleType::ChangeCase(CaseRule {
-            case_type,
-            include_extension: false,
-        }));
-
-        let subtitle = case_names.get(case_type_idx).copied().unwrap_or("Unknown");
-        
-        if let Some(idx) = edit_index {
-            // Update existing rule
-            self.imp().config.borrow_mut().rules[idx] = rule;
-            self.rebuild_rules_list(rules_list);
-        } else {
-            // Add new rule
-            self.imp().config.borrow_mut().rules.push(rule);
-            let rule_index = self.imp().config.borrow().rules.len() - 1;
-            let row = self.create_rule_row("Change Case", subtitle, "format-text-rich-symbolic", rule_index, rules_list);
-            rules_list.append(&row);
-        }
-        self.update_preview();
-    }
-
-    fn show_case_edit_dialog(&self, rules_list: &gtk::ListBox, edit_index: usize, existing: crate::core::CaseRule) {
-        let dialog = adw::Window::builder()
-            .title("Edit Change Case Rule")
-            .default_width(400)
-            .default_height(400)
-            .modal(true)
-            .transient_for(self)
-            .build();
-
-        let toolbar_view = adw::ToolbarView::new();
-        
-        let header = adw::HeaderBar::new();
-        header.set_show_end_title_buttons(false);
-        header.set_show_start_title_buttons(false);
-        
-        let cancel_btn = gtk::Button::with_label("Cancel");
-        cancel_btn.add_css_class("flat");
-        let save_btn = gtk::Button::with_label("Save");
-        save_btn.add_css_class("suggested-action");
-        
-        header.pack_start(&cancel_btn);
-        header.pack_end(&save_btn);
-        toolbar_view.add_top_bar(&header);
-
-        let content = gtk::Box::builder()
-            .orientation(gtk::Orientation::Vertical)
-            .margin_start(24)
-            .margin_end(24)
-            .margin_top(12)
-            .margin_bottom(24)
-            .spacing(12)
-            .build();
-
-        let group = adw::PreferencesGroup::builder()
-            .title("Case Type")
-            .build();
-
-        let case_types = [
-            ("lowercase", "All letters become lowercase"),
-            ("UPPERCASE", "All letters become uppercase"),
-            ("Title Case", "First letter of each word uppercase"),
-            ("Sentence case", "First letter uppercase, rest lowercase"),
-            ("snake_case", "Words joined with underscores"),
-            ("kebab-case", "Words joined with hyphens"),
-        ];
-
-        // Map existing case type to dropdown index
-        let existing_idx = match existing.case_type {
-            crate::core::CaseType::Lower => 0,
-            crate::core::CaseType::Upper => 1,
-            crate::core::CaseType::Title => 2,
-            crate::core::CaseType::Sentence => 3,
-            crate::core::CaseType::Snake => 4,
-            crate::core::CaseType::Kebab => 5,
-            _ => 0,
-        };
-
-        let case_dropdown = adw::ComboRow::builder()
-            .title("Convert to")
-            .model(&gtk::StringList::new(&case_types.map(|(name, _)| name)))
-            .selected(existing_idx)
-            .build();
-        group.add(&case_dropdown);
-
-        let desc_label = gtk::Label::builder()
-            .label(case_types[existing_idx as usize].1)
-            .css_classes(vec!["dim-label", "caption"])
-            .xalign(0.0)
-            .margin_top(6)
-            .build();
-
-        case_dropdown.connect_selected_notify(clone!(
-            #[weak]
-            desc_label,
-            move |dropdown| {
-                let idx = dropdown.selected() as usize;
-                if idx < case_types.len() {
-                    desc_label.set_label(case_types[idx].1);
-                }
-            }
-        ));
-
-        content.append(&group);
-        content.append(&desc_label);
-
-        toolbar_view.set_content(Some(&content));
-        dialog.set_content(Some(&toolbar_view));
-
-        let dialog_clone = dialog.clone();
-        cancel_btn.connect_clicked(move |_| {
-            dialog_clone.close();
-        });
-
-        let dialog_clone = dialog.clone();
-        let rules_list_clone = rules_list.clone();
-        let window = self.clone();
-        save_btn.connect_clicked(move |_| {
-            let case_idx = case_dropdown.selected() as usize;
-            window.add_case_rule_at(&rules_list_clone, case_idx, Some(edit_index));
-            dialog_clone.close();
-        });
-
-        dialog.present();
-    }
-
-    fn show_insert_config_dialog(&self, rules_list: &gtk::ListBox) {
-        let dialog = adw::Window::builder()
-            .title("Insert Text")
-            .default_width(400)
-            .default_height(380)
-            .modal(true)
-            .transient_for(self)
-            .build();
-
-        let toolbar_view = adw::ToolbarView::new();
-        
-        let header = adw::HeaderBar::new();
-        header.set_show_end_title_buttons(false);
-        header.set_show_start_title_buttons(false);
-        
-        let cancel_btn = gtk::Button::with_label("Cancel");
-        cancel_btn.add_css_class("flat");
-        let add_btn = gtk::Button::with_label("Add Rule");
-        add_btn.add_css_class("suggested-action");
-        
-        header.pack_start(&cancel_btn);
-        header.pack_end(&add_btn);
-        toolbar_view.add_top_bar(&header);
-
-        let content = gtk::Box::builder()
-            .orientation(gtk::Orientation::Vertical)
-            .margin_start(24)
-            .margin_end(24)
-            .margin_top(12)
-            .margin_bottom(24)
-            .spacing(18)
-            .build();
-
-        // Text to insert
-        let text_group = adw::PreferencesGroup::new();
-        let text_entry = adw::EntryRow::builder()
-            .title("Text to insert")
-            .build();
-        text_group.add(&text_entry);
-        content.append(&text_group);
-
-        // Position
-        let pos_group = adw::PreferencesGroup::builder()
-            .title("Position")
-            .build();
-        
-        let position_dropdown = adw::ComboRow::builder()
-            .title("Insert at")
-            .model(&gtk::StringList::new(&["Beginning (prefix)", "End (suffix)", "At position"]))
-            .build();
-        pos_group.add(&position_dropdown);
-
-        let position_spin = adw::SpinRow::builder()
-            .title("Character position")
-            .adjustment(&gtk::Adjustment::new(0.0, 0.0, 999.0, 1.0, 10.0, 0.0))
-            .sensitive(false)
-            .build();
-        pos_group.add(&position_spin);
-
-        position_dropdown.connect_selected_notify(clone!(
-            #[weak]
-            position_spin,
-            move |dropdown| {
-                position_spin.set_sensitive(dropdown.selected() == 2);
-            }
-        ));
-
-        content.append(&pos_group);
-        toolbar_view.set_content(Some(&content));
-        dialog.set_content(Some(&toolbar_view));
-
-        let dialog_clone = dialog.clone();
-        cancel_btn.connect_clicked(move |_| {
-            dialog_clone.close();
-        });
-
-        let dialog_clone = dialog.clone();
-        let rules_list_clone = rules_list.clone();
-        let window = self.clone();
-        add_btn.connect_clicked(move |_| {
-            let text = text_entry.text().to_string();
-            let position = position_dropdown.selected();
-            let pos_value = position_spin.value() as i32;
-
-            if !text.is_empty() {
-                window.add_insert_rule(&rules_list_clone, text, position as usize, pos_value);
-            }
-            dialog_clone.close();
-        });
-
-        dialog.present();
-    }
-
-    fn add_insert_rule(&self, rules_list: &gtk::ListBox, text: String, position: usize, pos_value: i32) {
-        self.add_insert_rule_at(rules_list, text, position, pos_value, None);
-    }
-
-    fn add_insert_rule_at(&self, rules_list: &gtk::ListBox, text: String, position: usize, pos_value: i32, edit_index: Option<usize>) {
-        use crate::core::{RenameRule, RuleType, InsertRule, InsertText, InsertPosition};
-
-        let insert_pos = match position {
-            0 => InsertPosition::Prefix,
-            1 => InsertPosition::Suffix,
-            _ => InsertPosition::Position(pos_value),
-        };
-
-        let pos_names = ["at beginning", "at end", &format!("at position {}", pos_value)];
-
-        let rule = RenameRule::new(RuleType::Insert(InsertRule {
-            text: InsertText::Fixed(text.clone()),
-            position: insert_pos,
-        }));
-
-        let subtitle = format!("\"{}\" {}", text, pos_names.get(position).unwrap_or(&""));
-        
-        if let Some(idx) = edit_index {
-            // Update existing rule
-            self.imp().config.borrow_mut().rules[idx] = rule;
-            self.rebuild_rules_list(rules_list);
-        } else {
-            // Add new rule
-            self.imp().config.borrow_mut().rules.push(rule);
-            let rule_index = self.imp().config.borrow().rules.len() - 1;
-            let row = self.create_rule_row("Insert", &subtitle, "insert-text-symbolic", rule_index, rules_list);
-            rules_list.append(&row);
-        }
-        self.update_preview();
-    }
-
-    fn show_insert_edit_dialog(&self, rules_list: &gtk::ListBox, edit_index: usize, existing: crate::core::InsertRule) {
-        let dialog = adw::Window::builder()
-            .title("Edit Insert Rule")
-            .default_width(400)
-            .default_height(380)
-            .modal(true)
-            .transient_for(self)
-            .build();
-
-        let toolbar_view = adw::ToolbarView::new();
-        
-        let header = adw::HeaderBar::new();
-        header.set_show_end_title_buttons(false);
-        header.set_show_start_title_buttons(false);
-        
-        let cancel_btn = gtk::Button::with_label("Cancel");
-        cancel_btn.add_css_class("flat");
-        let save_btn = gtk::Button::with_label("Save");
-        save_btn.add_css_class("suggested-action");
-        
-        header.pack_start(&cancel_btn);
-        header.pack_end(&save_btn);
-        toolbar_view.add_top_bar(&header);
-
-        let content = gtk::Box::builder()
-            .orientation(gtk::Orientation::Vertical)
-            .margin_start(24)
-            .margin_end(24)
-            .margin_top(12)
-            .margin_bottom(24)
-            .spacing(18)
-            .build();
-
-        // Extract existing values
-        let existing_text = match &existing.text {
-            crate::core::InsertText::Fixed(t) => t.clone(),
-            _ => String::new(),
-        };
-        
-        let (existing_position, existing_pos_value) = match &existing.position {
-            crate::core::InsertPosition::Prefix => (0u32, 0),
-            crate::core::InsertPosition::Suffix => (1, 0),
-            crate::core::InsertPosition::Position(p) => (2, *p),
-            _ => (0, 0),
-        };
-
-        // Text to insert
-        let text_group = adw::PreferencesGroup::new();
-        let text_entry = adw::EntryRow::builder()
-            .title("Text to insert")
-            .text(&existing_text)
-            .build();
-        text_group.add(&text_entry);
-        content.append(&text_group);
-
-        // Position
-        let pos_group = adw::PreferencesGroup::builder()
-            .title("Position")
-            .build();
-        
-        let position_dropdown = adw::ComboRow::builder()
-            .title("Insert at")
-            .model(&gtk::StringList::new(&["Beginning (prefix)", "End (suffix)", "At position"]))
-            .selected(existing_position)
-            .build();
-        pos_group.add(&position_dropdown);
-
-        let position_spin = adw::SpinRow::builder()
-            .title("Character position")
-            .adjustment(&gtk::Adjustment::new(existing_pos_value as f64, 0.0, 999.0, 1.0, 10.0, 0.0))
-            .sensitive(existing_position == 2)
-            .build();
-        pos_group.add(&position_spin);
-
-        position_dropdown.connect_selected_notify(clone!(
-            #[weak]
-            position_spin,
-            move |dropdown| {
-                position_spin.set_sensitive(dropdown.selected() == 2);
-            }
-        ));
-
-        content.append(&pos_group);
-        toolbar_view.set_content(Some(&content));
-        dialog.set_content(Some(&toolbar_view));
-
-        let dialog_clone = dialog.clone();
-        cancel_btn.connect_clicked(move |_| {
-            dialog_clone.close();
-        });
-
-        let dialog_clone = dialog.clone();
-        let rules_list_clone = rules_list.clone();
-        let window = self.clone();
-        save_btn.connect_clicked(move |_| {
-            let text = text_entry.text().to_string();
-            let position = position_dropdown.selected();
-            let pos_value = position_spin.value() as i32;
-
-            if !text.is_empty() {
-                window.add_insert_rule_at(&rules_list_clone, text, position as usize, pos_value, Some(edit_index));
-            }
-            dialog_clone.close();
-        });
-
-        dialog.present();
-    }
-
-    fn show_remove_config_dialog(&self, rules_list: &gtk::ListBox) {
-        let dialog = adw::Window::builder()
-            .title("Remove Text")
-            .default_width(400)
-            .default_height(430)
-            .modal(true)
-            .transient_for(self)
-            .build();
-
-        let toolbar_view = adw::ToolbarView::new();
-        
-        let header = adw::HeaderBar::new();
-        header.set_show_end_title_buttons(false);
-        header.set_show_start_title_buttons(false);
-        
-        let cancel_btn = gtk::Button::with_label("Cancel");
-        cancel_btn.add_css_class("flat");
-        let add_btn = gtk::Button::with_label("Add Rule");
-        add_btn.add_css_class("suggested-action");
-        
-        header.pack_start(&cancel_btn);
-        header.pack_end(&add_btn);
-        toolbar_view.add_top_bar(&header);
-
-        let content = gtk::Box::builder()
-            .orientation(gtk::Orientation::Vertical)
-            .margin_start(24)
-            .margin_end(24)
-            .margin_top(12)
-            .margin_bottom(24)
-            .spacing(18)
-            .build();
-
-        // Remove type
-        let type_group = adw::PreferencesGroup::new();
-        let remove_type = adw::ComboRow::builder()
-            .title("Remove")
-            .model(&gtk::StringList::new(&[
-                "Specific text",
-                "First N characters",
-                "Last N characters",
-                "All digits",
-                "All whitespace",
-                "Bracketed content (…)",
-            ]))
-            .build();
-        type_group.add(&remove_type);
-        content.append(&type_group);
-
-        // Text to remove (for specific text)
-        let text_group = adw::PreferencesGroup::new();
-        let text_entry = adw::EntryRow::builder()
-            .title("Text to remove")
-            .build();
-        text_group.add(&text_entry);
-        content.append(&text_group);
-
-        // Number of characters
-        let num_group = adw::PreferencesGroup::new();
-        let num_spin = adw::SpinRow::builder()
-            .title("Number of characters")
-            .adjustment(&gtk::Adjustment::new(1.0, 1.0, 999.0, 1.0, 10.0, 0.0))
-            .sensitive(false)
-            .build();
-        num_group.add(&num_spin);
-        content.append(&num_group);
-
-        remove_type.connect_selected_notify(clone!(
-            #[weak]
-            text_entry,
-            #[weak]
-            num_spin,
-            move |dropdown| {
-                let idx = dropdown.selected();
-                text_entry.set_sensitive(idx == 0);
-                num_spin.set_sensitive(idx == 1 || idx == 2);
-            }
-        ));
-
-        toolbar_view.set_content(Some(&content));
-        dialog.set_content(Some(&toolbar_view));
-
-        let dialog_clone = dialog.clone();
-        cancel_btn.connect_clicked(move |_| {
-            dialog_clone.close();
-        });
-
-        let dialog_clone = dialog.clone();
-        let rules_list_clone = rules_list.clone();
-        let window = self.clone();
-        add_btn.connect_clicked(move |_| {
-            let remove_type_idx = remove_type.selected() as usize;
-            let text = text_entry.text().to_string();
-            let num = num_spin.value() as usize;
-
-            window.add_remove_rule(&rules_list_clone, remove_type_idx, text, num);
-            dialog_clone.close();
-        });
-
-        dialog.present();
-    }
-
-    fn add_remove_rule(&self, rules_list: &gtk::ListBox, remove_type: usize, text: String, num: usize) {
-        self.add_remove_rule_at(rules_list, remove_type, text, num, None);
-    }
-
-    fn add_remove_rule_at(&self, rules_list: &gtk::ListBox, remove_type: usize, text: String, num: usize, edit_index: Option<usize>) {
-        use crate::core::{RenameRule, RuleType, RemoveRule, RemoveTarget, BracketType};
-
-        let (target, subtitle) = match remove_type {
-            0 => (RemoveTarget::Text { text: text.clone(), case_sensitive: true }, format!("\"{}\"", text)),
-            1 => (RemoveTarget::FirstN(num), format!("First {} characters", num)),
-            2 => (RemoveTarget::LastN(num), format!("Last {} characters", num)),
-            3 => (RemoveTarget::Digits, "All digits".to_string()),
-            4 => (RemoveTarget::Whitespace, "All whitespace".to_string()),
-            5 => (RemoveTarget::Bracketed(BracketType::All), "Bracketed content".to_string()),
-            _ => return,
-        };
-
-        let rule = RenameRule::new(RuleType::Remove(RemoveRule { target }));
-        
-        if let Some(idx) = edit_index {
-            // Update existing rule
-            self.imp().config.borrow_mut().rules[idx] = rule;
-            self.rebuild_rules_list(rules_list);
-        } else {
-            // Add new rule
-            self.imp().config.borrow_mut().rules.push(rule);
-            let rule_index = self.imp().config.borrow().rules.len() - 1;
-            let row = self.create_rule_row("Remove", &subtitle, "edit-delete-symbolic", rule_index, rules_list);
-            rules_list.append(&row);
-        }
-        self.update_preview();
-    }
-
-    fn show_remove_edit_dialog(&self, rules_list: &gtk::ListBox, edit_index: usize, existing: crate::core::RemoveRule) {
-        let dialog = adw::Window::builder()
-            .title("Edit Remove Rule")
-            .default_width(400)
-            .default_height(430)
-            .modal(true)
-            .transient_for(self)
-            .build();
-
-        let toolbar_view = adw::ToolbarView::new();
-        
-        let header = adw::HeaderBar::new();
-        header.set_show_end_title_buttons(false);
-        header.set_show_start_title_buttons(false);
-        
-        let cancel_btn = gtk::Button::with_label("Cancel");
-        cancel_btn.add_css_class("flat");
-        let save_btn = gtk::Button::with_label("Save");
-        save_btn.add_css_class("suggested-action");
-        
-        header.pack_start(&cancel_btn);
-        header.pack_end(&save_btn);
-        toolbar_view.add_top_bar(&header);
-
-        let content = gtk::Box::builder()
-            .orientation(gtk::Orientation::Vertical)
-            .margin_start(24)
-            .margin_end(24)
-            .margin_top(12)
-            .margin_bottom(24)
-            .spacing(18)
-            .build();
-
-        // Extract existing values
-        let (existing_type, existing_text, existing_num): (u32, String, usize) = match &existing.target {
-            crate::core::RemoveTarget::Text { text, .. } => (0, text.clone(), 0),
-            crate::core::RemoveTarget::FirstN(n) => (1, String::new(), *n),
-            crate::core::RemoveTarget::LastN(n) => (2, String::new(), *n),
-            crate::core::RemoveTarget::Digits => (3, String::new(), 0),
-            crate::core::RemoveTarget::Whitespace => (4, String::new(), 0),
-            crate::core::RemoveTarget::Bracketed(_) => (5, String::new(), 0),
-            _ => (0, String::new(), 0),
-        };
-
-        // Remove type
-        let type_group = adw::PreferencesGroup::new();
-        let remove_type = adw::ComboRow::builder()
-            .title("Remove")
-            .model(&gtk::StringList::new(&[
-                "Specific text",
-                "First N characters",
-                "Last N characters",
-                "All digits",
-                "All whitespace",
-                "Bracketed content (…)",
-            ]))
-            .selected(existing_type)
-            .build();
-        type_group.add(&remove_type);
-        content.append(&type_group);
-
-        // Text to remove (for specific text)
-        let text_group = adw::PreferencesGroup::new();
-        let text_entry = adw::EntryRow::builder()
-            .title("Text to remove")
-            .text(&existing_text)
-            .sensitive(existing_type == 0)
-            .build();
-        text_group.add(&text_entry);
-        content.append(&text_group);
-
-        // Number of characters
-        let num_group = adw::PreferencesGroup::new();
-        let num_spin = adw::SpinRow::builder()
-            .title("Number of characters")
-            .adjustment(&gtk::Adjustment::new(existing_num.max(1) as f64, 1.0, 999.0, 1.0, 10.0, 0.0))
-            .sensitive(existing_type == 1 || existing_type == 2)
-            .build();
-        num_group.add(&num_spin);
-        content.append(&num_group);
-
-        remove_type.connect_selected_notify(clone!(
-            #[weak]
-            text_entry,
-            #[weak]
-            num_spin,
-            move |dropdown| {
-                let idx = dropdown.selected();
-                text_entry.set_sensitive(idx == 0);
-                num_spin.set_sensitive(idx == 1 || idx == 2);
-            }
-        ));
-
-        toolbar_view.set_content(Some(&content));
-        dialog.set_content(Some(&toolbar_view));
-
-        let dialog_clone = dialog.clone();
-        cancel_btn.connect_clicked(move |_| {
-            dialog_clone.close();
-        });
-
-        let dialog_clone = dialog.clone();
-        let rules_list_clone = rules_list.clone();
-        let window = self.clone();
-        save_btn.connect_clicked(move |_| {
-            let remove_type_idx = remove_type.selected() as usize;
-            let text = text_entry.text().to_string();
-            let num = num_spin.value() as usize;
-
-            window.add_remove_rule_at(&rules_list_clone, remove_type_idx, text, num, Some(edit_index));
-            dialog_clone.close();
-        });
-
-        dialog.present();
-    }
-
-    fn show_numbering_config_dialog(&self, rules_list: &gtk::ListBox) {
-        let dialog = adw::Window::builder()
-            .title("Add Numbering")
-            .default_width(400)
-            .default_height(480)
-            .modal(true)
-            .transient_for(self)
-            .build();
-
-        let toolbar_view = adw::ToolbarView::new();
-        
-        let header = adw::HeaderBar::new();
-        header.set_show_end_title_buttons(false);
-        header.set_show_start_title_buttons(false);
-        
-        let cancel_btn = gtk::Button::with_label("Cancel");
-        cancel_btn.add_css_class("flat");
-        let add_btn = gtk::Button::with_label("Add Rule");
-        add_btn.add_css_class("suggested-action");
-        
-        header.pack_start(&cancel_btn);
-        header.pack_end(&add_btn);
-        toolbar_view.add_top_bar(&header);
-
-        let content = gtk::Box::builder()
-            .orientation(gtk::Orientation::Vertical)
-            .margin_start(24)
-            .margin_end(24)
-            .margin_top(12)
-            .margin_bottom(24)
-            .spacing(18)
-            .build();
-
-        // Number settings
-        let num_group = adw::PreferencesGroup::builder()
-            .title("Numbering")
-            .build();
-
-        let start_spin = adw::SpinRow::builder()
-            .title("Start at")
-            .adjustment(&gtk::Adjustment::new(1.0, 0.0, 9999.0, 1.0, 10.0, 0.0))
-            .build();
-        num_group.add(&start_spin);
-
-        let increment_spin = adw::SpinRow::builder()
-            .title("Increment by")
-            .adjustment(&gtk::Adjustment::new(1.0, 1.0, 100.0, 1.0, 10.0, 0.0))
-            .build();
-        num_group.add(&increment_spin);
-
-        let padding_spin = adw::SpinRow::builder()
-            .title("Digits (zero-padding)")
-            .adjustment(&gtk::Adjustment::new(2.0, 1.0, 10.0, 1.0, 1.0, 0.0))
-            .build();
-        num_group.add(&padding_spin);
-
-        content.append(&num_group);
-
-        // Position
-        let pos_group = adw::PreferencesGroup::builder()
-            .title("Position")
-            .build();
-
-        let position_dropdown = adw::ComboRow::builder()
-            .title("Insert at")
-            .model(&gtk::StringList::new(&["Beginning (prefix)", "End (suffix)"]))
-            .selected(1)
-            .build();
-        pos_group.add(&position_dropdown);
-
-        let separator_entry = adw::EntryRow::builder()
-            .title("Separator")
-            .text("_")
-            .build();
-        pos_group.add(&separator_entry);
-
-        content.append(&pos_group);
-
-        toolbar_view.set_content(Some(&content));
-        dialog.set_content(Some(&toolbar_view));
-
-        let dialog_clone = dialog.clone();
-        cancel_btn.connect_clicked(move |_| {
-            dialog_clone.close();
-        });
-
-        let dialog_clone = dialog.clone();
-        let rules_list_clone = rules_list.clone();
-        let window = self.clone();
-        add_btn.connect_clicked(move |_| {
-            let start = start_spin.value() as i64;
-            let increment = increment_spin.value() as i64;
-            let padding = padding_spin.value() as usize;
-            let position = position_dropdown.selected() as usize;
-            let separator = separator_entry.text().to_string();
-
-            window.add_numbering_rule(&rules_list_clone, start, increment, padding, position, separator);
-            dialog_clone.close();
-        });
-
-        dialog.present();
-    }
-
-    fn add_numbering_rule(
-        &self,
-        rules_list: &gtk::ListBox,
-        start: i64,
-        increment: i64,
-        padding: usize,
-        position: usize,
-        separator: String,
-    ) {
-        self.add_numbering_rule_at(rules_list, start, increment, padding, position, separator, None);
-    }
-
-    fn add_numbering_rule_at(
-        &self,
-        rules_list: &gtk::ListBox,
-        start: i64,
-        increment: i64,
-        padding: usize,
-        position: usize,
-        separator: String,
-        edit_index: Option<usize>,
-    ) {
-        use crate::core::{RenameRule, RuleType, NumberingRule, InsertPosition, NumberFormat};
-
-        let (insert_pos, prefix, suffix) = if position == 0 {
-            (InsertPosition::Prefix, String::new(), separator)
-        } else {
-            (InsertPosition::Suffix, separator, String::new())
-        };
-
-        let rule = RenameRule::new(RuleType::Numbering(NumberingRule {
-            start,
-            increment,
-            padding,
-            position: insert_pos,
-            prefix,
-            suffix,
-            reset_per_folder: false,
-            format: NumberFormat::Decimal,
-        }));
-
-        let pos_name = if position == 0 { "prefix" } else { "suffix" };
-        let subtitle = format!("Start: {}, Pad: {} digits, {}", start, padding, pos_name);
-
-        if let Some(idx) = edit_index {
-            // Update existing rule
-            self.imp().config.borrow_mut().rules[idx] = rule;
-            self.rebuild_rules_list(rules_list);
-        } else {
-            // Add new rule
-            self.imp().config.borrow_mut().rules.push(rule);
-            let rule_index = self.imp().config.borrow().rules.len() - 1;
-            let row = self.create_rule_row("Numbering", &subtitle, "view-list-ordered-symbolic", rule_index, rules_list);
-            rules_list.append(&row);
-        }
-        self.update_preview();
-    }
-
-    fn show_numbering_edit_dialog(&self, rules_list: &gtk::ListBox, edit_index: usize, existing: crate::core::NumberingRule) {
-        let dialog = adw::Window::builder()
-            .title("Edit Numbering Rule")
-            .default_width(400)
-            .default_height(480)
-            .modal(true)
-            .transient_for(self)
-            .build();
-
-        let toolbar_view = adw::ToolbarView::new();
-        
-        let header = adw::HeaderBar::new();
-        header.set_show_end_title_buttons(false);
-        header.set_show_start_title_buttons(false);
-        
-        let cancel_btn = gtk::Button::with_label("Cancel");
-        cancel_btn.add_css_class("flat");
-        let save_btn = gtk::Button::with_label("Save");
-        save_btn.add_css_class("suggested-action");
-        
-        header.pack_start(&cancel_btn);
-        header.pack_end(&save_btn);
-        toolbar_view.add_top_bar(&header);
-
-        let content = gtk::Box::builder()
-            .orientation(gtk::Orientation::Vertical)
-            .margin_start(24)
-            .margin_end(24)
-            .margin_top(12)
-            .margin_bottom(24)
-            .spacing(18)
-            .build();
-
-        // Extract existing values
-        let (existing_position, existing_separator) = match &existing.position {
-            crate::core::InsertPosition::Prefix => (0u32, existing.suffix.clone()),
-            crate::core::InsertPosition::Suffix => (1, existing.prefix.clone()),
-            _ => (1, String::new()),
-        };
-
-        // Number settings
-        let num_group = adw::PreferencesGroup::builder()
-            .title("Numbering")
-            .build();
-
-        let start_spin = adw::SpinRow::builder()
-            .title("Start at")
-            .adjustment(&gtk::Adjustment::new(existing.start as f64, 0.0, 9999.0, 1.0, 10.0, 0.0))
-            .build();
-        num_group.add(&start_spin);
-
-        let increment_spin = adw::SpinRow::builder()
-            .title("Increment by")
-            .adjustment(&gtk::Adjustment::new(existing.increment as f64, 1.0, 100.0, 1.0, 10.0, 0.0))
-            .build();
-        num_group.add(&increment_spin);
-
-        let padding_spin = adw::SpinRow::builder()
-            .title("Digits (zero-padding)")
-            .adjustment(&gtk::Adjustment::new(existing.padding as f64, 1.0, 10.0, 1.0, 1.0, 0.0))
-            .build();
-        num_group.add(&padding_spin);
-
-        content.append(&num_group);
-
-        // Position
-        let pos_group = adw::PreferencesGroup::builder()
-            .title("Position")
-            .build();
-
-        let position_dropdown = adw::ComboRow::builder()
-            .title("Insert at")
-            .model(&gtk::StringList::new(&["Beginning (prefix)", "End (suffix)"]))
-            .selected(existing_position)
-            .build();
-        pos_group.add(&position_dropdown);
-
-        let separator_entry = adw::EntryRow::builder()
-            .title("Separator")
-            .text(&existing_separator)
-            .build();
-        pos_group.add(&separator_entry);
-
-        content.append(&pos_group);
-
-        toolbar_view.set_content(Some(&content));
-        dialog.set_content(Some(&toolbar_view));
-
-        let dialog_clone = dialog.clone();
-        cancel_btn.connect_clicked(move |_| {
-            dialog_clone.close();
-        });
-
-        let dialog_clone = dialog.clone();
-        let rules_list_clone = rules_list.clone();
-        let window = self.clone();
-        save_btn.connect_clicked(move |_| {
-            let start = start_spin.value() as i64;
-            let increment = increment_spin.value() as i64;
-            let padding = padding_spin.value() as usize;
-            let position = position_dropdown.selected() as usize;
-            let separator = separator_entry.text().to_string();
-
-            window.add_numbering_rule_at(&rules_list_clone, start, increment, padding, position, separator, Some(edit_index));
-            dialog_clone.close();
-        });
-
-        dialog.present();
-    }
-
-    fn show_datetime_config_dialog(&self, rules_list: &gtk::ListBox) {
-        let dialog = adw::Window::builder()
-            .title("Date/Time")
-            .default_width(400)
-            .default_height(420)
-            .modal(true)
-            .transient_for(self)
-            .build();
-
-        let toolbar_view = adw::ToolbarView::new();
-        
-        let header = adw::HeaderBar::new();
-        header.set_show_end_title_buttons(false);
-        header.set_show_start_title_buttons(false);
-        
-        let cancel_btn = gtk::Button::with_label("Cancel");
-        cancel_btn.add_css_class("flat");
-        let add_btn = gtk::Button::with_label("Add Rule");
-        add_btn.add_css_class("suggested-action");
-        
-        header.pack_start(&cancel_btn);
-        header.pack_end(&add_btn);
-        toolbar_view.add_top_bar(&header);
-
-        let content = gtk::Box::builder()
-            .orientation(gtk::Orientation::Vertical)
-            .margin_start(24)
-            .margin_end(24)
-            .margin_top(12)
-            .margin_bottom(24)
-            .spacing(18)
-            .build();
-
-        // Date source
-        let source_group = adw::PreferencesGroup::new();
-        let source_dropdown = adw::ComboRow::builder()
-            .title("Date source")
-            .model(&gtk::StringList::new(&["File modified date", "File created date", "Current date", "EXIF date taken"]))
-            .build();
-        source_group.add(&source_dropdown);
-        content.append(&source_group);
-
-        // Format
-        let format_group = adw::PreferencesGroup::builder()
-            .title("Format")
-            .build();
-        
-        let format_dropdown = adw::ComboRow::builder()
-            .title("Date format")
-            .model(&gtk::StringList::new(&[
-                "2026-01-06",
-                "20260106",
-                "06-01-2026",
-                "Jan 06, 2026",
-                "2026-01-06_14-30-00",
-            ]))
-            .build();
-        format_group.add(&format_dropdown);
-
-        let position_dropdown = adw::ComboRow::builder()
-            .title("Insert at")
-            .model(&gtk::StringList::new(&["Beginning (prefix)", "End (suffix)"]))
-            .build();
-        format_group.add(&position_dropdown);
-
-        content.append(&format_group);
-
-        toolbar_view.set_content(Some(&content));
-        dialog.set_content(Some(&toolbar_view));
-
-        let dialog_clone = dialog.clone();
-        cancel_btn.connect_clicked(move |_| {
-            dialog_clone.close();
-        });
-
-        let dialog_clone = dialog.clone();
-        let rules_list_clone = rules_list.clone();
-        let window = self.clone();
-        add_btn.connect_clicked(move |_| {
-            let source = source_dropdown.selected() as usize;
-            let format = format_dropdown.selected() as usize;
-            let position = position_dropdown.selected() as usize;
-
-            window.add_datetime_rule(&rules_list_clone, source, format, position);
-            dialog_clone.close();
-        });
-
-        dialog.present();
-    }
-
-    fn show_datetime_edit_dialog(&self, rules_list: &gtk::ListBox, edit_index: usize, existing: crate::core::InsertRule) {
-        use crate::core::{DateSource, InsertPosition, InsertText};
-
-        let (existing_source, existing_format) = match &existing.text {
-            InsertText::FileDate { source, format } => {
-                let source_idx = match source {
-                    DateSource::Modified => 0,
-                    DateSource::Created => 1,
-                    DateSource::Now => 2,
-                    DateSource::ExifDateTaken => 3,
-                    DateSource::Accessed => 0,
-                };
-                let formats = ["%Y-%m-%d", "%Y%m%d", "%d-%m-%Y", "%b %d, %Y", "%Y-%m-%d_%H-%M-%S"];
-                let format_idx = formats.iter().position(|f| *f == format).unwrap_or(0);
-                (source_idx, format_idx)
-            }
-            _ => (0, 0),
-        };
-        let existing_position = if matches!(existing.position, InsertPosition::Suffix) { 1 } else { 0 };
-
-        let dialog = adw::Window::builder()
-            .title("Edit Date/Time")
-            .default_width(400)
-            .default_height(420)
-            .modal(true)
-            .transient_for(self)
-            .build();
-
-        let toolbar_view = adw::ToolbarView::new();
-
-        let header = adw::HeaderBar::new();
-        header.set_show_end_title_buttons(false);
-        header.set_show_start_title_buttons(false);
-
-        let cancel_btn = gtk::Button::with_label("Cancel");
-        cancel_btn.add_css_class("flat");
-        let save_btn = gtk::Button::with_label("Save");
-        save_btn.add_css_class("suggested-action");
-
-        header.pack_start(&cancel_btn);
-        header.pack_end(&save_btn);
-        toolbar_view.add_top_bar(&header);
-
-        let content = gtk::Box::builder()
-            .orientation(gtk::Orientation::Vertical)
-            .margin_start(24)
-            .margin_end(24)
-            .margin_top(12)
-            .margin_bottom(24)
-            .spacing(18)
-            .build();
-
-        // Date source
-        let source_group = adw::PreferencesGroup::new();
-        let source_dropdown = adw::ComboRow::builder()
-            .title("Date source")
-            .model(&gtk::StringList::new(&["File modified date", "File created date", "Current date", "EXIF date taken"]))
-            .selected(existing_source as u32)
-            .build();
-        source_group.add(&source_dropdown);
-        content.append(&source_group);
-
-        // Format
-        let format_group = adw::PreferencesGroup::builder()
-            .title("Format")
-            .build();
-
-        let format_dropdown = adw::ComboRow::builder()
-            .title("Date format")
-            .model(&gtk::StringList::new(&[
-                "2026-01-06",
-                "20260106",
-                "06-01-2026",
-                "Jan 06, 2026",
-                "2026-01-06_14-30-00",
-            ]))
-            .selected(existing_format as u32)
-            .build();
-        format_group.add(&format_dropdown);
-
-        let position_dropdown = adw::ComboRow::builder()
-            .title("Insert at")
-            .model(&gtk::StringList::new(&["Beginning (prefix)", "End (suffix)"]))
-            .selected(existing_position)
-            .build();
-        format_group.add(&position_dropdown);
-
-        content.append(&format_group);
-
-        toolbar_view.set_content(Some(&content));
-        dialog.set_content(Some(&toolbar_view));
-
-        let dialog_clone = dialog.clone();
-        cancel_btn.connect_clicked(move |_| {
-            dialog_clone.close();
-        });
-
-        let dialog_clone = dialog.clone();
-        let rules_list_clone = rules_list.clone();
-        let window = self.clone();
-        save_btn.connect_clicked(move |_| {
-            let source = source_dropdown.selected() as usize;
-            let format = format_dropdown.selected() as usize;
-            let position = position_dropdown.selected() as usize;
-
-            window.add_datetime_rule_at(&rules_list_clone, source, format, position, Some(edit_index));
-            dialog_clone.close();
-        });
-
-        dialog.present();
-    }
-
-    /// Subtitle shared by add_datetime_rule and get_rule_display_info so a rebuilt
-    /// row is identical to the one created when the rule was added.
+    /// Subtitle shared with rule_dialogs so a rebuilt row is identical to the
+    /// one created when the rule was added.
+    #[cfg(test)]
     fn datetime_subtitle(rule: &crate::core::InsertRule) -> String {
-        use crate::core::{DateSource, InsertPosition, InsertText};
-
-        let source_name = match &rule.text {
-            InsertText::FileDate { source, .. } => match source {
-                DateSource::Modified => "Modified date",
-                DateSource::Created => "Created date",
-                DateSource::Now => "Current date",
-                DateSource::ExifDateTaken => "EXIF date",
-                DateSource::Accessed => "Accessed date",
-            },
-            _ => "Date",
-        };
-        let pos_name = match rule.position {
-            InsertPosition::Suffix => "suffix",
-            _ => "prefix",
-        };
-        format!("{} as {}", source_name, pos_name)
+        super::rule_dialogs::datetime_subtitle_for(rule)
     }
-
-    fn add_datetime_rule(&self, rules_list: &gtk::ListBox, source: usize, format: usize, position: usize) {
-        self.add_datetime_rule_at(rules_list, source, format, position, None);
-    }
-
-    fn add_datetime_rule_at(&self, rules_list: &gtk::ListBox, source: usize, format: usize, position: usize, edit_index: Option<usize>) {
-        use crate::core::{RenameRule, RuleType, InsertRule, InsertText, InsertPosition, DateSource};
-
-        let formats = ["%Y-%m-%d", "%Y%m%d", "%d-%m-%Y", "%b %d, %Y", "%Y-%m-%d_%H-%M-%S"];
-        let format_str = formats.get(format).unwrap_or(&"%Y-%m-%d").to_string();
-
-        let date_source = match source {
-            0 => DateSource::Modified,
-            1 => DateSource::Created,
-            2 => DateSource::Now,
-            3 => DateSource::ExifDateTaken,
-            _ => DateSource::Modified,
-        };
-
-        let insert_pos = if position == 0 {
-            InsertPosition::Prefix
-        } else {
-            InsertPosition::Suffix
-        };
-
-        let insert_rule = InsertRule {
-            text: InsertText::FileDate {
-                source: date_source,
-                format: format_str,
-            },
-            position: insert_pos,
-        };
-        let subtitle = Self::datetime_subtitle(&insert_rule);
-        let rule = RenameRule::new(RuleType::Insert(insert_rule));
-
-        let rule_index = if let Some(idx) = edit_index {
-            // Update existing rule
-            self.imp().config.borrow_mut().rules[idx] = rule;
-            idx
-        } else {
-            // Add new rule
-            self.imp().config.borrow_mut().rules.push(rule);
-            self.imp().config.borrow().rules.len() - 1
-        };
-
-        let row = self.create_rule_row(
-            "Date/Time",
-            &subtitle,
-            "x-office-calendar-symbolic",
-            rule_index,
-            rules_list,
-        );
-
-        if edit_index.is_some() {
-            // Remove old row and insert new one at same position
-            if let Some(old_row) = rules_list.row_at_index(rule_index as i32) {
-                let position = old_row.index();
-                rules_list.remove(&old_row);
-                rules_list.insert(&row, position);
-            }
-        } else {
-            rules_list.append(&row);
-        }
-        self.update_preview();
-    }
-
     // ============ Preset/Import/Export Dialogs ============
 
     fn show_save_preset_dialog(&self) {
-        let dialog = adw::MessageDialog::new(
-            Some(self),
-            Some("Save Preset"),
-            Some("Enter a name for this preset:"),
-        );
-
-        let entry = gtk::Entry::builder()
-            .placeholder_text("Preset name")
-            .build();
-        dialog.set_extra_child(Some(&entry));
-
-        dialog.add_response("cancel", "Cancel");
-        dialog.add_response("save", "Save");
-        dialog.set_response_appearance("save", adw::ResponseAppearance::Suggested);
-        dialog.set_default_response(Some("save"));
-
-        dialog.connect_response(None, clone!(
-            #[weak(rename_to = window)]
-            self,
-            move |dialog, response| {
-                if response == "save" {
-                    let name = entry.text().trim().to_string();
-                    if name.is_empty() {
-                        window.show_info_dialog("Preset Not Saved", "Preset name cannot be empty.");
-                        return;
-                    }
-                    let config = window.imp().config.borrow().clone();
-                    let preset = Preset::new(&name, config);
-                    let mut manager = PresetManager::default();
-                    match manager.add_preset(preset) {
-                        Ok(()) => window.show_info_dialog("Preset Saved", "The current rules were saved."),
-                        Err(err) => window.show_info_dialog("Preset Not Saved", &err.to_string()),
-                    }
-                }
-                dialog.close();
-            }
-        ));
-        dialog.present();
+        super::presets_dialog::show_save(self);
     }
 
     fn show_load_preset_dialog(&self) {
-        let manager = PresetManager::default();
-        let presets = manager
-            .get_all()
-            .into_iter()
-            .cloned()
-            .collect::<Vec<_>>();
-
-        if presets.is_empty() {
-            self.show_info_dialog("No Presets", "There are no presets to load yet.");
-            return;
-        }
-
-        let dialog = adw::MessageDialog::new(
-            Some(self),
-            Some("Load Preset"),
-            Some("Choose a preset to apply."),
-        );
-
-        let scroll = gtk::ScrolledWindow::builder()
-            .max_content_height(360)
-            .propagate_natural_height(true)
-            .margin_start(12)
-            .margin_end(12)
-            .build();
-        let list = gtk::ListBox::builder()
-            .selection_mode(gtk::SelectionMode::Single)
-            .css_classes(vec!["boxed-list"])
-            .build();
-
-        for preset in &presets {
-            let subtitle = preset
-                .description
-                .clone()
-                .unwrap_or_else(|| format!("{} rules", preset.config.rules.len()));
-            let row = adw::ActionRow::builder()
-                .title(&preset.name)
-                .subtitle(&subtitle)
-                .activatable(true)
-                .build();
-            list.append(&row);
-        }
-        list.select_row(list.row_at_index(0).as_ref());
-
-        scroll.set_child(Some(&list));
-        dialog.set_extra_child(Some(&scroll));
-        dialog.add_response("cancel", "Cancel");
-        dialog.add_response("load", "Load");
-        dialog.set_response_appearance("load", adw::ResponseAppearance::Suggested);
-
-        dialog.connect_response(None, clone!(
-            #[weak(rename_to = window)]
-            self,
-            move |dialog, response| {
-                if response == "load" {
-                    if let Some(row) = list.selected_row() {
-                        let idx = row.index() as usize;
-                        if let Some(preset) = presets.get(idx) {
-                            window.apply_preset(preset.clone());
-                        }
-                    }
-                }
-                dialog.close();
-            }
-        ));
-
-        dialog.present();
+        super::presets_dialog::show_load(self);
     }
 
-    fn apply_preset(&self, preset: Preset) {
+    /// Clone of the active rule configuration, for preset dialogs.
+    pub(crate) fn config_snapshot(&self) -> RenameConfig {
+        self.imp().config.borrow().clone()
+    }
+
+    pub(crate) fn apply_preset(&self, preset: Preset) {
         self.imp().config.replace(preset.config);
         if let Some(rules_list) = self.imp().rules_list.borrow().as_ref() {
             self.rebuild_rules_list(rules_list);
@@ -4025,184 +1852,17 @@ impl RenamerWindow {
     }
 
     fn show_import_csv_dialog(&self) {
-        let dialog = gtk::FileDialog::builder()
-            .title("Import from CSV")
-            .modal(true)
-            .build();
-
-        dialog.open(Some(self), gio::Cancellable::NONE, clone!(
-            #[weak(rename_to = window)]
-            self,
-            move |result| {
-                if let Ok(file) = result {
-                    if let Some(path) = file.path() {
-                        window.import_csv_file(path);
-                    }
-                }
-            }
-        ));
+        super::csv_io::show_import_dialog(self);
     }
 
     fn show_export_log_dialog(&self) {
-        let dialog = gtk::FileDialog::builder()
-            .title("Export Log")
-            .modal(true)
-            .build();
-
-        dialog.save(Some(self), gio::Cancellable::NONE, clone!(
-            #[weak(rename_to = window)]
-            self,
-            move |result| {
-                if let Ok(file) = result {
-                    if let Some(path) = file.path() {
-                        match window.imp().logger.borrow().export_csv(&path) {
-                            Ok(()) => window.show_info_dialog("Log Exported", "Rename log exported to CSV."),
-                            Err(err) => window.show_info_dialog("Export Failed", &err.to_string()),
-                        }
-                    }
-                }
-            }
-        ));
+        super::csv_io::show_export_dialog(self);
     }
 
-    fn import_csv_file(&self, path: PathBuf) {
-        match self.read_csv_rename_plan(path) {
-            Ok((previews, files)) => {
-                let count = previews.len();
-                let dialog = adw::MessageDialog::new(
-                    Some(self),
-                    Some("Import CSV Renames"),
-                    Some(&format!("Apply {} renames from the CSV file?", count)),
-                );
-                dialog.add_response("cancel", "Cancel");
-                dialog.add_response("rename", "Rename");
-                dialog.set_response_appearance("rename", adw::ResponseAppearance::Suggested);
-                dialog.connect_response(None, clone!(
-                    #[weak(rename_to = window)]
-                    self,
-                    move |dialog, response| {
-                        if response == "rename" {
-                            match crate::engine::execute_renames(&previews, &files) {
-                                Ok(result) => window.handle_rename_result(result),
-                                Err(err) => window.show_info_dialog("CSV Import Blocked", &err.to_string()),
-                            }
-                        }
-                        dialog.close();
-                    }
-                ));
-                dialog.present();
-            }
-            Err(err) => self.show_info_dialog("CSV Import Failed", &err.to_string()),
-        }
-    }
-
-    fn read_csv_rename_plan(
-        &self,
-        path: PathBuf,
-    ) -> crate::core::RenamerResult<(Vec<RenamePreview>, HashMap<Uuid, FileEntry>)> {
-        let mut reader = csv::Reader::from_path(path)?;
-        let headers = reader.headers()?.clone();
-        let path_idx = headers
-            .iter()
-            .position(|header| header == "original_path")
-            .ok_or_else(|| crate::core::RenamerError::Internal(
-                "CSV must include an original_path column".to_string(),
-            ))?;
-        let name_idx = headers
-            .iter()
-            .position(|header| header == "new_name")
-            .ok_or_else(|| crate::core::RenamerError::Internal(
-                "CSV must include a new_name column".to_string(),
-            ))?;
-
-        let mut previews = Vec::new();
-        let mut files = HashMap::new();
-
-        for record in reader.records() {
-            let record = record?;
-            let original_path = PathBuf::from(record.get(path_idx).unwrap_or_default());
-            let new_name = record.get(name_idx).unwrap_or_default().trim().to_string();
-            let entry = FileEntry::from_path(original_path.clone(), 0)?;
-            let new_path = original_path
-                .parent()
-                .map(|parent| parent.join(&new_name))
-                .unwrap_or_else(|| PathBuf::from(&new_name));
-            let status = if new_name == entry.original_name {
-                RenameStatus::Unchanged
-            } else {
-                RenameStatus::WillRename
-            };
-            previews.push(RenamePreview {
-                file_id: entry.id,
-                original_name: entry.original_name.clone(),
-                new_name,
-                new_path,
-                status,
-                message: None,
-            });
-            files.insert(entry.id, entry);
-        }
-
-        Ok((previews, files))
+    pub(crate) fn export_log_csv(&self, path: &std::path::Path) -> crate::core::RenamerResult<()> {
+        self.imp().logger.borrow().export_csv(path)
     }
 }
-
-// ============ Utility Functions ============
-
-fn get_icon_for_extension(ext: Option<&str>) -> &'static str {
-    match ext.map(str::to_ascii_lowercase).as_deref() {
-        Some("jpg") | Some("jpeg") | Some("png") | Some("gif") | Some("webp") | Some("svg") => {
-            "image-x-generic-symbolic"
-        }
-        Some("mp3") | Some("flac") | Some("ogg") | Some("wav") | Some("m4a") | Some("aac") => {
-            "audio-x-generic-symbolic"
-        }
-        Some("mp4") | Some("mkv") | Some("avi") | Some("mov") | Some("webm") => {
-            "video-x-generic-symbolic"
-        }
-        Some("pdf") => "x-office-document-symbolic",
-        Some("doc") | Some("docx") | Some("odt") => "x-office-document-symbolic",
-        Some("xls") | Some("xlsx") | Some("ods") => "x-office-spreadsheet-symbolic",
-        Some("ppt") | Some("pptx") | Some("odp") => "x-office-presentation-symbolic",
-        Some("txt") | Some("md") | Some("rst") | Some("html") | Some("htm") | Some("xml")
-        | Some("json") | Some("yaml") | Some("yml") | Some("toml") => "text-x-generic-symbolic",
-        Some("rs") | Some("py") | Some("js") | Some("ts") | Some("c") | Some("cpp")
-        | Some("h") | Some("hpp") | Some("css") | Some("scss") => "text-x-generic-symbolic",
-        Some("zip") | Some("tar") | Some("gz") | Some("7z") | Some("rar") => {
-            "package-x-generic-symbolic"
-        }
-        Some("appimage") | Some("exe") | Some("deb") | Some("rpm") => {
-            "application-x-executable-symbolic"
-        }
-        _ => "text-x-generic-symbolic",
-    }
-}
-
-fn get_icon_for_filename(name: &str) -> &'static str {
-    std::path::Path::new(name)
-        .extension()
-        .and_then(|ext| ext.to_str())
-        .map(|ext| get_icon_for_extension(Some(ext)))
-        .unwrap_or("text-x-generic-symbolic")
-}
-
-fn format_size(size: u64) -> String {
-    const KB: u64 = 1024;
-    const MB: u64 = KB * 1024;
-    const GB: u64 = MB * 1024;
-
-    if size >= GB {
-        format!("{:.1} GB", size as f64 / GB as f64)
-    } else if size >= MB {
-        format!("{:.1} MB", size as f64 / MB as f64)
-    } else if size >= KB {
-        format!("{:.1} KB", size as f64 / KB as f64)
-    } else {
-        format!("{} B", size)
-    }
-}
-
-// Additional imports for drag-and-drop
 
 #[cfg(test)]
 mod tests {
