@@ -4,7 +4,7 @@
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>MIT</project_license>
   <name>Bulk Renamer</name>
-  <summary>Bulk rename files with powerful rules</summary>
+  <summary>Powerful batch file renaming</summary>
   <description>
     <p>
       Bulk Renamer is a powerful, GNOME-native bulk file renaming application
@@ -30,13 +30,25 @@
     </p>
   </description>
   <launchable type="desktop-id">com.chrisdaggas.bulk-renamer.desktop</launchable>
+  <screenshots>
+    <screenshot type="default">
+      <image>https://raw.githubusercontent.com/christosdaggas/bulk-renamer/main/data/screenshots/main-window.png</image>
+      <caption>Main window with a list of files and renaming rules</caption>
+    </screenshot>
+  </screenshots>
   <url type="homepage">https://chrisdaggas.com</url>
+  <url type="bugtracker">https://github.com/christosdaggas/bulk-renamer/issues</url>
+  <url type="vcs-browser">https://github.com/christosdaggas/bulk-renamer</url>
   <developer id="com.chrisdaggas">
     <name>Christos A. Daggas</name>
   </developer>
+  <branding>
+    <color type="primary" scheme_preference="light">#62a0ea</color>
+    <color type="primary" scheme_preference="dark">#1a5fb4</color>
+  </branding>
   <content_rating type="oars-1.1" />
   <releases>
-    <release version="1.0.0" date="2026-01-06">
+    <release version="1.0.0" date="2026-07-18">
       <description>
         <p>Initial release of Bulk Renamer.</p>
       </description>
@@ -52,4 +64,5 @@
     <keyword>bulk</keyword>
     <keyword>batch</keyword>
   </keywords>
+  <translation type="gettext">bulk-renamer</translation>
 </component>

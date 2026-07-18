@@ -1,6 +1,6 @@
 [Desktop Entry]
 Name=Bulk Renamer
-Comment=Bulk rename files with powerful rules
+Comment=Rename multiple files at once using flexible rules
 Exec=bulk-renamer %F
 Icon=com.chrisdaggas.bulk-renamer
 Terminal=false

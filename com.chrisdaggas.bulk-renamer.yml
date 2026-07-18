@@ -1,10 +1,15 @@
-# Bulk Renamer Cosmic - Flatpak Manifest
-# Build with: flatpak-builder --user --install --force-clean build-dir com.chrisdaggas.bulk-renamer.yml
-# Runtime: GNOME 47
+# Bulk Renamer - Flatpak Manifest
+#
+# Local build:
+#   ./scripts/generate-cargo-sources.sh   # regenerate cargo-sources.json from Cargo.lock
+#   flatpak-builder --user --install --force-clean build-dir com.chrisdaggas.bulk-renamer.yml
+#
+# Flathub submission: switch the `type: dir` source below to the commented-out
+# `type: git` source (Flathub rejects dir sources).
 
 app-id: com.chrisdaggas.bulk-renamer
 runtime: org.gnome.Platform
-runtime-version: '47'
+runtime-version: '48'
 sdk: org.gnome.Sdk
 sdk-extensions:
   - org.freedesktop.Sdk.Extension.rust-stable
@@ -12,59 +17,60 @@ sdk-extensions:
 command: bulk-renamer
 
 finish-args:
-  # X11 + XShm access (for X11 compatibility)
-  - --share=ipc
-  - --socket=fallback-x11
-  # Wayland access
+  # Wayland, with X11 fallback (ipc is required for X11 shared memory)
   - --socket=wayland
+  - --socket=fallback-x11
+  - --share=ipc
   # GPU acceleration for GTK rendering
   - --device=dri
-  # File system access for renaming files
-  - --filesystem=home
-  - --filesystem=/media
-  - --filesystem=/mnt
-  - --filesystem=/run/media
-  # D-Bus session bus for desktop integration
-  - --socket=session-bus
-  # Portal access for file dialogs
-  - --talk-name=org.freedesktop.portal.Desktop
-  - --talk-name=org.freedesktop.portal.FileChooser
-  # Notifications
-  - --talk-name=org.freedesktop.Notifications
-  # Settings (for dark mode detection)
-  - --talk-name=org.freedesktop.portal.Settings
-  # GTK settings
-  - --talk-name=org.gtk.Settings
-  # Environment for libadwaita
-  - --env=GTK_THEME=Adwaita
+  # Full host filesystem access is required: this is a bulk file renamer and
+  # must be able to rename arbitrary user-selected files and folders anywhere
+  # on the system (portals only cover opening, not in-place renaming of
+  # whole directory trees).
+  - --filesystem=host
 
 build-options:
   append-path: /usr/lib/sdk/rust-stable/bin
   env:
     CARGO_HOME: /run/build/bulk-renamer/cargo
-    RUST_BACKTRACE: '1'
 
 modules:
   - name: bulk-renamer
     buildsystem: simple
     build-commands:
+      # Resolve dependencies from the vendored crates (cargo-sources.json)
+      - cargo --offline fetch --manifest-path Cargo.toml --verbose
       # Build the application
-      - cargo build --release --offline
+      - cargo --offline build --release
       # Install binary
       - install -Dm755 target/release/bulk-renamer /app/bin/bulk-renamer
       # Install desktop file
       - install -Dm644 data/com.chrisdaggas.bulk-renamer.desktop /app/share/applications/com.chrisdaggas.bulk-renamer.desktop
       # Install metainfo
       - install -Dm644 data/com.chrisdaggas.bulk-renamer.metainfo.xml /app/share/metainfo/com.chrisdaggas.bulk-renamer.metainfo.xml
-      # Install icons
+      # Install app icon
       - install -Dm644 data/icons/hicolor/scalable/apps/com.chrisdaggas.bulk-renamer.svg /app/share/icons/hicolor/scalable/apps/com.chrisdaggas.bulk-renamer.svg
-      # Install GResource if exists
-      - |
-        if [ -f data/resources/bulk-renamer.gresource ]; then
-          install -Dm644 data/resources/bulk-renamer.gresource /app/share/bulk-renamer/bulk-renamer.gresource
-        fi
+      # Compile and install translations
+      - bash scripts/compile-translations.sh /app/share/locale
     sources:
+      # ----- LOCAL DEVELOPMENT SOURCE ---------------------------------------
+      # Builds from the working tree. Flathub does NOT accept `type: dir`
+      # sources; for submission, comment this block out and enable the git
+      # source below.
       - type: dir
         path: .
-      # Cargo sources generated with flatpak-cargo-generator
+        skip:
+          - target
+          - build-dir
+          - .flatpak-builder
+      # ----- FLATHUB SUBMISSION SOURCE --------------------------------------
+      # Required for Flathub. Point tag/commit at the actual release:
+      # - type: git
+      #   url: https://github.com/christosdaggas/bulk-renamer.git
+      #   tag: v1.0.0  # TODO: replace with the real release tag
+      #   commit: TODO_RELEASE_COMMIT_SHA
+      # ----------------------------------------------------------------------
+      # Vendored crate sources generated from Cargo.lock so the build can run
+      # offline. Regenerate with scripts/generate-cargo-sources.sh whenever
+      # Cargo.lock changes.
       - cargo-sources.json
