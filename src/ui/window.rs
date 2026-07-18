@@ -978,12 +978,17 @@ impl RenamerWindow {
             ThemePreference::Dark => style_manager.set_color_scheme(adw::ColorScheme::ForceDark),
         }
         self.imp().logger.borrow_mut().set_enabled(settings.log_operations);
-        if settings.undo_persistence_enabled {
-            if let Err(err) = self.imp().undo_manager.borrow_mut().load_from_disk() {
-                tracing::error!("Failed to load undo history: {}", err);
+        // The toggle only controls disk persistence; in-session undo always works.
+        {
+            let mut manager = self.imp().undo_manager.borrow_mut();
+            manager.set_persistence(settings.undo_persistence_enabled);
+            if settings.undo_persistence_enabled {
+                if let Err(err) = manager.load_from_disk() {
+                    tracing::error!("Failed to load undo history: {}", err);
+                }
             }
         }
-        
+
         self.imp().settings.replace(settings);
     }
 
@@ -1430,10 +1435,10 @@ impl RenamerWindow {
         let error_count = result.failure_count();
 
         if let Some(batch) = result.batch.clone() {
-            if self.imp().settings.borrow().undo_persistence_enabled {
-                if let Err(err) = self.imp().undo_manager.borrow_mut().record_batch(batch.clone()) {
-                    tracing::error!("Failed to record undo batch: {}", err);
-                }
+            // Always record: the persistence setting only controls whether the
+            // manager writes the record to disk, never whether undo works.
+            if let Err(err) = self.imp().undo_manager.borrow_mut().record_batch(batch.clone()) {
+                tracing::error!("Failed to record undo batch: {}", err);
             }
             self.log_rename_batch(&batch);
         }
@@ -1589,8 +1594,12 @@ impl RenamerWindow {
             let mut settings = self.imp().settings.borrow_mut();
             apply(&mut settings);
         }
-        let log_enabled = self.imp().settings.borrow().log_operations;
+        let (log_enabled, persist_undo) = {
+            let settings = self.imp().settings.borrow();
+            (settings.log_operations, settings.undo_persistence_enabled)
+        };
         self.imp().logger.borrow_mut().set_enabled(log_enabled);
+        self.imp().undo_manager.borrow_mut().set_persistence(persist_undo);
         self.save_settings();
         self.update_preview();
     }

@@ -112,6 +112,26 @@ impl StoredBatch {
             fingerprints,
         }
     }
+
+    /// Rebuild a stored batch for `records`, carrying fingerprints forward from
+    /// an earlier capture instead of re-reading the disk. A record refused
+    /// because "the file changed" must keep the fingerprint of the file it
+    /// recorded — re-capturing here would adopt the impostor's fingerprint and
+    /// let the next retry move the wrong file onto the original path.
+    fn with_fingerprints_from(
+        batch: RenameBatch,
+        fingerprints: &HashMap<Uuid, FileFingerprint>,
+    ) -> Self {
+        let fingerprints = batch
+            .records
+            .iter()
+            .filter_map(|r| fingerprints.get(&r.id).map(|f| (r.id, f.clone())))
+            .collect();
+        Self {
+            batch,
+            fingerprints,
+        }
+    }
 }
 
 /// One reversal to apply: move the file now at `source` back to `dest`.
@@ -333,9 +353,13 @@ impl UndoManager {
 
         let stored = StoredBatch::capture(batch, |r| &r.new_path);
 
-        // Persist to disk if enabled
+        // Persist to disk if enabled. A failed write must not abort recording:
+        // the in-memory stack is the session's safety net and losing it over a
+        // full disk would turn one problem into two.
         if self.persist_to_disk {
-            self.save_batch_to_disk(&self.data_dir, &stored)?;
+            if let Err(err) = self.save_batch_to_disk(&self.data_dir, &stored) {
+                tracing::warn!("Could not persist the undo record: {}", err);
+            }
         }
 
         // Add to undo stack, dropping the persisted file of anything evicted so
@@ -351,6 +375,16 @@ impl UndoManager {
 
         self.undo_stack.push_back(stored);
         Ok(())
+    }
+
+    /// Enable or disable writing history to disk without touching the
+    /// in-memory stacks: in-session undo keeps working either way.
+    pub fn set_persistence(&mut self, persist: bool) {
+        if persist && !self.persist_to_disk {
+            let _ = fs::create_dir_all(&self.data_dir);
+            let _ = fs::create_dir_all(self.data_dir.join(REDO_SUBDIR));
+        }
+        self.persist_to_disk = persist;
     }
 
     /// Check if undo is available.
@@ -436,7 +470,10 @@ impl UndoManager {
         };
         if !remainder.records.is_empty() {
             self.undo_stack
-                .push_back(StoredBatch::capture(remainder, |r| &r.new_path));
+                .push_back(StoredBatch::with_fingerprints_from(
+                    remainder,
+                    &stored.fingerprints,
+                ));
         }
 
         if !redo_stored.batch.records.is_empty() {
@@ -503,7 +540,10 @@ impl UndoManager {
         };
         if !remainder.records.is_empty() {
             self.redo_stack
-                .push_back(StoredBatch::capture(remainder, |r| &r.original_path));
+                .push_back(StoredBatch::with_fingerprints_from(
+                    remainder,
+                    &stored.fingerprints,
+                ));
         }
 
         if !undo_stored.batch.records.is_empty() {
@@ -1461,5 +1501,105 @@ mod undo_safety_tests {
 
         fs::remove_dir_all(dir).ok();
         fs::remove_dir_all(data).ok();
+    }
+
+    /// A record refused because the file at its path changed must keep
+    /// refusing on retry. Re-capturing fingerprints on push-back used to adopt
+    /// the impostor's identity, and the second Ctrl+Z then moved the wrong
+    /// file onto the original path.
+    #[test]
+    fn a_refused_undo_keeps_refusing_the_impostor_on_retry() {
+        let dir = temp_dir("impostor-retry");
+        let data = dir.join("data");
+        let a = dir.join("a.txt");
+        fs::write(&a, "original").expect("write a");
+
+        let batch = run_rename(&[a.clone()], replace_config("a", "z"));
+        let z = dir.join("z.txt");
+        assert!(z.exists());
+
+        let mut manager = UndoManager::new(data, false);
+        manager.record_batch(batch).expect("record");
+
+        // Replace the renamed file with an impostor under a fresh inode.
+        fs::remove_file(&z).expect("remove renamed file");
+        fs::write(&z, "impostor").expect("write impostor");
+
+        let first = manager.undo().expect("first undo runs");
+        assert_eq!(first.success_count, 0, "the impostor must be refused");
+        assert!(manager.can_undo(), "the refused record stays undoable");
+
+        let second = manager.undo().expect("second undo runs");
+        assert_eq!(
+            second.success_count, 0,
+            "the retry must keep refusing: adopting the impostor's fingerprint \
+             on push-back is exactly the bug this test guards against"
+        );
+        assert!(!a.exists(), "the impostor must never land on the original path");
+        assert_eq!(
+            fs::read_to_string(&z).expect("read impostor"),
+            "impostor",
+            "the impostor stays where it is"
+        );
+
+        fs::remove_dir_all(dir).ok();
+    }
+
+    /// In-session undo must work with persistence off: the setting controls
+    /// the disk, not the safety net.
+    #[test]
+    fn undo_works_in_session_without_persistence() {
+        let dir = temp_dir("no-persist");
+        let data = dir.join("data");
+        let a = dir.join("a.txt");
+        fs::write(&a, "content").expect("write a");
+
+        let batch = run_rename(&[a.clone()], replace_config("a", "b"));
+        let mut manager = UndoManager::new(data.clone(), false);
+        manager.record_batch(batch).expect("record");
+
+        assert!(
+            !data.exists()
+                || fs::read_dir(&data)
+                    .map(|mut entries| entries.next().is_none())
+                    .unwrap_or(true),
+            "nothing may be written to disk with persistence off"
+        );
+
+        let result = manager.undo().expect("undo");
+        assert_eq!(result.success_count, 1);
+        assert!(a.exists(), "the rename was reverted purely from memory");
+
+        fs::remove_dir_all(dir).ok();
+    }
+
+    /// Toggling persistence on starts writing records without touching the
+    /// in-memory history.
+    #[test]
+    fn set_persistence_starts_writing_without_dropping_history() {
+        let dir = temp_dir("toggle-persist");
+        let data = dir.join("data");
+        let a = dir.join("a.txt");
+        let b = dir.join("m.txt");
+        fs::write(&a, "one").expect("write a");
+        fs::write(&b, "two").expect("write b");
+
+        let mut manager = UndoManager::new(data.clone(), false);
+        let first = run_rename(&[a.clone()], replace_config("a", "x"));
+        manager.record_batch(first).expect("record first");
+
+        manager.set_persistence(true);
+        let second = run_rename(&[b.clone()], replace_config("m", "n"));
+        manager.record_batch(second).expect("record second");
+
+        let on_disk = fs::read_dir(&data)
+            .expect("data dir exists")
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "json"))
+            .count();
+        assert_eq!(on_disk, 1, "only the batch recorded after the toggle is persisted");
+        assert_eq!(manager.undo_count(), 2, "both batches stay undoable in memory");
+
+        fs::remove_dir_all(dir).ok();
     }
 }
