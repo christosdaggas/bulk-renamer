@@ -34,6 +34,19 @@ cp "data/icons/symbolic/apps/com.chrisdaggas.bulk-renamer-symbolic.svg" "$SOURCE
 cp "LICENSE" "$SOURCES/"
 cp "README.md" "$SOURCES/"
 
+# Compile and stage translations; the spec below installs whatever exists.
+bash scripts/compile-translations.sh target/locale
+LOCALE_INSTALL=""
+LOCALE_FILES=""
+while read -r lang; do
+    [[ -z "$lang" ]] && continue
+    mo="target/locale/$lang/LC_MESSAGES/bulk-renamer.mo"
+    [[ -f "$mo" ]] || continue
+    cp "$mo" "$SOURCES/bulk-renamer-$lang.mo"
+    LOCALE_INSTALL+="install -Dm644 $SOURCES/bulk-renamer-$lang.mo %{buildroot}%{_datadir}/locale/$lang/LC_MESSAGES/bulk-renamer.mo"$'\n'
+    LOCALE_FILES+="%{_datadir}/locale/$lang/LC_MESSAGES/bulk-renamer.mo"$'\n'
+done < po/LINGUAS
+
 cat > "$SPEC_FILE" <<EOF
 Name:           bulk-renamer
 Version:        $VERSION
@@ -78,7 +91,11 @@ install -Dm644 "%{SOURCE4}" "%{buildroot}%{_datadir}/icons/hicolor/symbolic/apps
 install -Dm644 "%{SOURCE5}" "%{buildroot}%{_datadir}/licenses/bulk-renamer/LICENSE"
 install -Dm644 "%{SOURCE6}" "%{buildroot}%{_datadir}/doc/bulk-renamer/README.md"
 
+# Translations
+$LOCALE_INSTALL
+
 %files
+$LOCALE_FILES
 %license %{_datadir}/licenses/bulk-renamer/LICENSE
 %doc %{_datadir}/doc/bulk-renamer/README.md
 %{_bindir}/bulk-renamer

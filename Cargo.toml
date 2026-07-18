@@ -126,6 +126,18 @@ assets = [
     ["data/com.chrisdaggas.bulk-renamer.metainfo.xml", "usr/share/metainfo/", "644"],
     ["data/icons/hicolor/scalable/apps/com.chrisdaggas.bulk-renamer.svg", "usr/share/icons/hicolor/scalable/apps/", "644"],
     ["README.md", "usr/share/doc/bulk-renamer/", "644"],
+    # Translations: compiled by scripts/compile-translations.sh (run by
+    # scripts/package-deb.sh) into target/locale before cargo deb.
+    ["target/locale/ar/LC_MESSAGES/bulk-renamer.mo", "usr/share/locale/ar/LC_MESSAGES/", "644"],
+    ["target/locale/de/LC_MESSAGES/bulk-renamer.mo", "usr/share/locale/de/LC_MESSAGES/", "644"],
+    ["target/locale/el/LC_MESSAGES/bulk-renamer.mo", "usr/share/locale/el/LC_MESSAGES/", "644"],
+    ["target/locale/es/LC_MESSAGES/bulk-renamer.mo", "usr/share/locale/es/LC_MESSAGES/", "644"],
+    ["target/locale/fr/LC_MESSAGES/bulk-renamer.mo", "usr/share/locale/fr/LC_MESSAGES/", "644"],
+    ["target/locale/hi/LC_MESSAGES/bulk-renamer.mo", "usr/share/locale/hi/LC_MESSAGES/", "644"],
+    ["target/locale/it/LC_MESSAGES/bulk-renamer.mo", "usr/share/locale/it/LC_MESSAGES/", "644"],
+    ["target/locale/pt/LC_MESSAGES/bulk-renamer.mo", "usr/share/locale/pt/LC_MESSAGES/", "644"],
+    ["target/locale/ru/LC_MESSAGES/bulk-renamer.mo", "usr/share/locale/ru/LC_MESSAGES/", "644"],
+    ["target/locale/zh/LC_MESSAGES/bulk-renamer.mo", "usr/share/locale/zh/LC_MESSAGES/", "644"],
 ]
 
 # RPM package configuration (for cargo-generate-rpm)

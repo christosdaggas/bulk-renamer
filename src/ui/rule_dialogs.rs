@@ -12,6 +12,7 @@ use crate::core::{
     TransliterateRule, TransliterationMapping, TrimRule, TrimType,
 };
 use super::window::RenamerWindow;
+use gettextrs::gettext;
 use libadwaita as adw;
 use adw::prelude::*;
 use gtk4 as gtk;
@@ -166,7 +167,11 @@ pub fn open(window: &RenamerWindow, kind: RuleKind, edit_index: Option<usize>) {
 fn present(window: &RenamerWindow, title: &str, form: Form, edit_index: Option<usize>) {
     let editing = edit_index.is_some();
     let dialog = adw::Window::builder()
-        .title(if editing { format!("Edit {} Rule", title) } else { title.to_string() })
+        .title(if editing {
+            gettext("Edit {} Rule").replacen("{}", &gettext(title), 1)
+        } else {
+            gettext(title)
+        })
         .default_width(420)
         .modal(true)
         .transient_for(window)
@@ -177,9 +182,10 @@ fn present(window: &RenamerWindow, title: &str, form: Form, edit_index: Option<u
     header.set_show_end_title_buttons(false);
     header.set_show_start_title_buttons(false);
 
-    let cancel_btn = gtk::Button::with_label("Cancel");
+    let cancel_btn = gtk::Button::with_label(&gettext("Cancel"));
     cancel_btn.add_css_class("flat");
-    let save_btn = gtk::Button::with_label(if editing { "Save" } else { "Add Rule" });
+    let save_btn =
+        gtk::Button::with_label(&if editing { gettext("Save") } else { gettext("Add Rule") });
     save_btn.add_css_class("suggested-action");
     header.pack_start(&cancel_btn);
     header.pack_end(&save_btn);
@@ -261,6 +267,14 @@ fn entry_row(title: &str, text: &str) -> adw::EntryRow {
     row
 }
 
+/// StringList whose entries are run through gettext at construction time.
+/// The source arrays keep the English msgids.
+fn translated_string_list(items: &[&str]) -> gtk::StringList {
+    let translated: Vec<String> = items.iter().map(|item| gettext(*item)).collect();
+    let refs: Vec<&str> = translated.iter().map(String::as_str).collect();
+    gtk::StringList::new(&refs)
+}
+
 macro_rules! prefs_group {
     ($title:expr $(, $row:expr)* $(,)?) => {{
         let group = adw::PreferencesGroup::new();
@@ -288,35 +302,37 @@ fn vbox(children: &[&adw::PreferencesGroup]) -> gtk::Widget {
 fn replace_form(existing: Option<ReplaceRule>) -> Form {
     let seed = existing.unwrap_or_default();
 
-    let find_entry = entry_row("Find", &seed.find);
-    let replace_entry = entry_row("Replace with", &seed.replace);
+    let find_entry = entry_row(&gettext("Find"), &seed.find);
+    let replace_entry = entry_row(&gettext("Replace with"), &seed.replace);
     let case_sensitive = adw::SwitchRow::builder()
-        .title("Case sensitive")
+        .title(gettext("Case sensitive"))
         .active(seed.case_sensitive)
         .build();
     let use_regex = adw::SwitchRow::builder()
-        .title("Use regular expressions")
+        .title(gettext("Use regular expressions"))
         .active(seed.use_regex)
         .build();
     let replace_all = adw::SwitchRow::builder()
-        .title("Replace all occurrences")
+        .title(gettext("Replace all occurrences"))
         .active(seed.replace_all)
         .build();
 
     let widget = vbox(&[
         &prefs_group!(None::<&str>, &find_entry),
         &prefs_group!(None::<&str>, &replace_entry),
-        &prefs_group!(Some("Options"), &case_sensitive, &use_regex, &replace_all),
+        &prefs_group!(Some(gettext("Options").as_str()), &case_sensitive, &use_regex, &replace_all),
     ]);
 
     let include_extension = seed.include_extension;
     let collect = Box::new(move || {
         let find = find_entry.text().to_string();
         if find.is_empty() {
-            return Err("Enter the text to find.".to_string());
+            return Err(gettext("Enter the text to find."));
         }
         if use_regex.is_active() {
-            regex::Regex::new(&find).map_err(|e| format!("Invalid regular expression: {}", e))?;
+            regex::Regex::new(&find).map_err(|e| {
+                gettext("Invalid regular expression: {}").replacen("{}", &e.to_string(), 1)
+            })?;
         }
         Ok(RuleType::Replace(ReplaceRule {
             find,
@@ -367,24 +383,24 @@ fn case_form(existing: Option<CaseRule>) -> Form {
         .unwrap_or(0);
 
     let dropdown = adw::ComboRow::builder()
-        .title("Convert to")
-        .model(&gtk::StringList::new(&names))
+        .title(gettext("Convert to"))
+        .model(&translated_string_list(&names))
         .selected(selected as u32)
         .build();
 
     let desc_label = gtk::Label::builder()
-        .label(CASE_TYPES[selected].2)
+        .label(gettext(CASE_TYPES[selected].2))
         .css_classes(vec!["dim-label", "caption"])
         .xalign(0.0)
         .build();
     let desc_clone = desc_label.clone();
     dropdown.connect_selected_notify(move |dd| {
         if let Some((_, _, desc)) = CASE_TYPES.get(dd.selected() as usize) {
-            desc_clone.set_label(desc);
+            desc_clone.set_label(&gettext(*desc));
         }
     });
 
-    let group = prefs_group!(Some("Case Type"), &dropdown);
+    let group = prefs_group!(Some(gettext("Case Type").as_str()), &dropdown);
     let box_ = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
         .spacing(12)
@@ -423,8 +439,8 @@ fn insert_form(existing: Option<InsertRule>) -> Form {
     };
 
     let source_dropdown = adw::ComboRow::builder()
-        .title("Insert")
-        .model(&gtk::StringList::new(&[
+        .title(gettext("Insert"))
+        .model(&translated_string_list(&[
             "Custom text",
             "Parent folder name",
             "Grandparent folder name",
@@ -432,7 +448,7 @@ fn insert_form(existing: Option<InsertRule>) -> Form {
         .selected(seed_source)
         .build();
 
-    let text_entry = entry_row("Text to insert", &seed_text);
+    let text_entry = entry_row(&gettext("Text to insert"), &seed_text);
     text_entry.set_sensitive(seed_source == 0);
     let text_clone = text_entry.clone();
     source_dropdown.connect_selected_notify(move |dd| {
@@ -440,8 +456,8 @@ fn insert_form(existing: Option<InsertRule>) -> Form {
     });
 
     let position_dropdown = adw::ComboRow::builder()
-        .title("Insert at")
-        .model(&gtk::StringList::new(&[
+        .title(gettext("Insert at"))
+        .model(&translated_string_list(&[
             "Beginning (prefix)",
             "End (suffix)",
             "At position",
@@ -450,7 +466,7 @@ fn insert_form(existing: Option<InsertRule>) -> Form {
         .build();
 
     let position_spin = adw::SpinRow::builder()
-        .title("Character position")
+        .title(gettext("Character position"))
         .adjustment(&gtk::Adjustment::new(
             seed_pos_value as f64,
             -999.0,
@@ -469,7 +485,7 @@ fn insert_form(existing: Option<InsertRule>) -> Form {
     let widget = vbox(&[
         &prefs_group!(None::<&str>, &source_dropdown),
         &prefs_group!(None::<&str>, &text_entry),
-        &prefs_group!(Some("Position"), &position_dropdown, &position_spin),
+        &prefs_group!(Some(gettext("Position").as_str()), &position_dropdown, &position_spin),
     ]);
 
     let collect = Box::new(move || {
@@ -479,7 +495,7 @@ fn insert_form(existing: Option<InsertRule>) -> Form {
             _ => {
                 let value = text_entry.text().to_string();
                 if value.is_empty() {
-                    return Err("Enter the text to insert.".to_string());
+                    return Err(gettext("Enter the text to insert."));
                 }
                 InsertText::Fixed(value)
             }
@@ -530,8 +546,8 @@ fn remove_form(existing: Option<RemoveRule>) -> Form {
     };
 
     let type_dropdown = adw::ComboRow::builder()
-        .title("Remove")
-        .model(&gtk::StringList::new(&[
+        .title(gettext("Remove"))
+        .model(&translated_string_list(&[
             "Specific text",
             "Regex pattern",
             "First N characters",
@@ -544,18 +560,18 @@ fn remove_form(existing: Option<RemoveRule>) -> Form {
         .selected(seed_type)
         .build();
 
-    let text_entry = entry_row("Text or pattern", &seed_text);
+    let text_entry = entry_row(&gettext("Text or pattern"), &seed_text);
     let case_switch = adw::SwitchRow::builder()
-        .title("Case sensitive")
+        .title(gettext("Case sensitive"))
         .active(seed_case)
         .build();
     let num_spin = adw::SpinRow::builder()
-        .title("Number of characters")
+        .title(gettext("Number of characters"))
         .adjustment(&gtk::Adjustment::new(seed_num, 1.0, 999.0, 1.0, 10.0, 0.0))
         .build();
     let bracket_dropdown = adw::ComboRow::builder()
-        .title("Bracket type")
-        .model(&gtk::StringList::new(
+        .title(gettext("Bracket type"))
+        .model(&translated_string_list(
             &BRACKETS.iter().map(|(_, name)| *name).collect::<Vec<_>>(),
         ))
         .selected(seed_bracket)
@@ -580,7 +596,7 @@ fn remove_form(existing: Option<RemoveRule>) -> Form {
     let widget = vbox(&[
         &prefs_group!(None::<&str>, &type_dropdown),
         &prefs_group!(None::<&str>, &text_entry),
-        &prefs_group!(Some("Options"), &case_switch, &num_spin, &bracket_dropdown),
+        &prefs_group!(Some(gettext("Options").as_str()), &case_switch, &num_spin, &bracket_dropdown),
     ]);
 
     let collect = Box::new(move || {
@@ -588,7 +604,7 @@ fn remove_form(existing: Option<RemoveRule>) -> Form {
             0 => {
                 let text = text_entry.text().to_string();
                 if text.is_empty() {
-                    return Err("Enter the text to remove.".to_string());
+                    return Err(gettext("Enter the text to remove."));
                 }
                 RemoveTarget::Text {
                     text,
@@ -598,10 +614,11 @@ fn remove_form(existing: Option<RemoveRule>) -> Form {
             1 => {
                 let pattern = text_entry.text().to_string();
                 if pattern.is_empty() {
-                    return Err("Enter the pattern to remove.".to_string());
+                    return Err(gettext("Enter the pattern to remove."));
                 }
-                regex::Regex::new(&pattern)
-                    .map_err(|e| format!("Invalid regular expression: {}", e))?;
+                regex::Regex::new(&pattern).map_err(|e| {
+                    gettext("Invalid regular expression: {}").replacen("{}", &e.to_string(), 1)
+                })?;
                 RemoveTarget::Pattern(pattern)
             }
             2 => RemoveTarget::FirstN(num_spin.value() as usize),
@@ -637,20 +654,20 @@ fn numbering_form(existing: Option<NumberingRule>) -> Form {
     let seed = existing.unwrap_or_default();
 
     let start_spin = adw::SpinRow::builder()
-        .title("Start at")
+        .title(gettext("Start at"))
         .adjustment(&gtk::Adjustment::new(seed.start as f64, 0.0, 999_999.0, 1.0, 10.0, 0.0))
         .build();
     let increment_spin = adw::SpinRow::builder()
-        .title("Increment by")
+        .title(gettext("Increment by"))
         .adjustment(&gtk::Adjustment::new(seed.increment as f64, 1.0, 1000.0, 1.0, 10.0, 0.0))
         .build();
     let padding_spin = adw::SpinRow::builder()
-        .title("Digits (zero-padding)")
+        .title(gettext("Digits (zero-padding)"))
         .adjustment(&gtk::Adjustment::new(seed.padding as f64, 1.0, 10.0, 1.0, 1.0, 0.0))
         .build();
     let format_dropdown = adw::ComboRow::builder()
-        .title("Number format")
-        .model(&gtk::StringList::new(
+        .title(gettext("Number format"))
+        .model(&translated_string_list(
             &NUMBER_FORMATS.iter().map(|(_, name)| *name).collect::<Vec<_>>(),
         ))
         .selected(
@@ -663,25 +680,25 @@ fn numbering_form(existing: Option<NumberingRule>) -> Form {
 
     let is_prefix = matches!(seed.position, InsertPosition::Prefix);
     let position_dropdown = adw::ComboRow::builder()
-        .title("Insert at")
-        .model(&gtk::StringList::new(&["Beginning (prefix)", "End (suffix)"]))
+        .title(gettext("Insert at"))
+        .model(&translated_string_list(&["Beginning (prefix)", "End (suffix)"]))
         .selected(if is_prefix { 0 } else { 1 })
         .build();
 
     // The separator sits between the number and the name, so it maps to
     // `suffix` when the number is a prefix and `prefix` when it is a suffix.
     let seed_separator = if is_prefix { seed.suffix.clone() } else { seed.prefix.clone() };
-    let separator_entry = entry_row("Separator", &seed_separator);
+    let separator_entry = entry_row(&gettext("Separator"), &seed_separator);
 
     let reset_switch = adw::SwitchRow::builder()
-        .title("Restart numbering per folder")
+        .title(gettext("Restart numbering per folder"))
         .active(seed.reset_per_folder)
         .build();
 
     let widget = vbox(&[
-        &prefs_group!(Some("Numbering"), &start_spin, &increment_spin, &padding_spin),
-        &prefs_group!(Some("Format"), &format_dropdown),
-        &prefs_group!(Some("Position"), &position_dropdown, &separator_entry, &reset_switch),
+        &prefs_group!(Some(gettext("Numbering").as_str()), &start_spin, &increment_spin, &padding_spin),
+        &prefs_group!(Some(gettext("Format").as_str()), &format_dropdown),
+        &prefs_group!(Some(gettext("Position").as_str()), &position_dropdown, &separator_entry, &reset_switch),
     ]);
 
     let collect = Box::new(move || {
@@ -777,24 +794,26 @@ fn datetime_form(seed: DateTimeSeed) -> Form {
         .position(|(s, _)| (*s as usize) == (seed.source as usize))
         .unwrap_or(0);
     let source_dropdown = adw::ComboRow::builder()
-        .title("Date source")
-        .model(&gtk::StringList::new(
+        .title(gettext("Date source"))
+        .model(&translated_string_list(
             &DATE_SOURCES.iter().map(|(_, name)| *name).collect::<Vec<_>>(),
         ))
         .selected(source_selected as u32)
         .build();
 
     // Known formats select their preset entry; anything else is "Custom".
+    // The format examples are literal dates, so they stay untranslated.
+    let custom_label = gettext("Custom…");
     let mut format_names: Vec<&str> = DATE_FORMATS.iter().map(|(_, example)| *example).collect();
-    format_names.push("Custom…");
+    format_names.push(custom_label.as_str());
     let known_format = DATE_FORMATS.iter().position(|(fmt, _)| *fmt == seed.format);
     let format_dropdown = adw::ComboRow::builder()
-        .title("Date format")
+        .title(gettext("Date format"))
         .model(&gtk::StringList::new(&format_names))
         .selected(known_format.unwrap_or(DATE_FORMATS.len()) as u32)
         .build();
 
-    let custom_entry = entry_row("Custom format (chrono)", &seed.format);
+    let custom_entry = entry_row(&gettext("Custom format (chrono)"), &seed.format);
     custom_entry.set_sensitive(known_format.is_none());
     let custom_clone = custom_entry.clone();
     format_dropdown.connect_selected_notify(move |dd| {
@@ -802,14 +821,14 @@ fn datetime_form(seed: DateTimeSeed) -> Form {
     });
 
     let position_dropdown = adw::ComboRow::builder()
-        .title("Insert at")
-        .model(&gtk::StringList::new(&["Beginning (prefix)", "End (suffix)"]))
+        .title(gettext("Insert at"))
+        .model(&translated_string_list(&["Beginning (prefix)", "End (suffix)"]))
         .selected(if seed.suffix { 1 } else { 0 })
         .build();
 
     let widget = vbox(&[
         &prefs_group!(None::<&str>, &source_dropdown),
-        &prefs_group!(Some("Format"), &format_dropdown, &custom_entry, &position_dropdown),
+        &prefs_group!(Some(gettext("Format").as_str()), &format_dropdown, &custom_entry, &position_dropdown),
     ]);
 
     let native = seed.native;
@@ -823,7 +842,7 @@ fn datetime_form(seed: DateTimeSeed) -> Form {
         } else {
             let value = custom_entry.text().to_string();
             if value.is_empty() {
-                return Err("Enter a chrono date format, e.g. %Y-%m-%d.".to_string());
+                return Err(gettext("Enter a chrono date format, e.g. %Y-%m-%d."));
             }
             value
         };
@@ -860,8 +879,8 @@ fn trim_form(existing: Option<TrimRule>) -> Form {
     };
 
     let type_dropdown = adw::ComboRow::builder()
-        .title("Trim")
-        .model(&gtk::StringList::new(&[
+        .title(gettext("Trim"))
+        .model(&translated_string_list(&[
             "Whitespace from both ends",
             "Whitespace from the start",
             "Whitespace from the end",
@@ -871,9 +890,9 @@ fn trim_form(existing: Option<TrimRule>) -> Form {
         .selected(seed_type)
         .build();
 
-    let chars_entry = entry_row("Characters to trim", &seed_chars);
+    let chars_entry = entry_row(&gettext("Characters to trim"), &seed_chars);
     let length_spin = adw::SpinRow::builder()
-        .title("Maximum length")
+        .title(gettext("Maximum length"))
         .adjustment(&gtk::Adjustment::new(seed_len, 1.0, 255.0, 1.0, 10.0, 0.0))
         .build();
 
@@ -890,7 +909,7 @@ fn trim_form(existing: Option<TrimRule>) -> Form {
 
     let widget = vbox(&[
         &prefs_group!(None::<&str>, &type_dropdown),
-        &prefs_group!(Some("Options"), &chars_entry, &length_spin),
+        &prefs_group!(Some(gettext("Options").as_str()), &chars_entry, &length_spin),
     ]);
 
     let collect = Box::new(move || {
@@ -900,7 +919,7 @@ fn trim_form(existing: Option<TrimRule>) -> Form {
             3 => {
                 let chars = chars_entry.text().to_string();
                 if chars.is_empty() {
-                    return Err("Enter the characters to trim.".to_string());
+                    return Err(gettext("Enter the characters to trim."));
                 }
                 (TrimType::Characters, Some(chars))
             }
@@ -923,24 +942,29 @@ fn pad_form(existing: Option<PadRule>) -> Form {
     });
 
     let length_spin = adw::SpinRow::builder()
-        .title("Target length")
+        .title(gettext("Target length"))
         .adjustment(&gtk::Adjustment::new(seed.length as f64, 1.0, 255.0, 1.0, 10.0, 0.0))
         .build();
-    let char_entry = entry_row("Padding character", &seed.pad_char.to_string());
+    let char_entry = entry_row(&gettext("Padding character"), &seed.pad_char.to_string());
     let direction_dropdown = adw::ComboRow::builder()
-        .title("Pad at")
-        .model(&gtk::StringList::new(&["Start", "End"]))
+        .title(gettext("Pad at"))
+        .model(&translated_string_list(&["Start", "End"]))
         .selected(if seed.pad_start { 0 } else { 1 })
         .build();
 
-    let widget = vbox(&[&prefs_group!(Some("Padding"), &length_spin, &char_entry, &direction_dropdown)]);
+    let widget = vbox(&[&prefs_group!(
+        Some(gettext("Padding").as_str()),
+        &length_spin,
+        &char_entry,
+        &direction_dropdown
+    )]);
 
     let collect = Box::new(move || {
         let pad_char = char_entry
             .text()
             .chars()
             .next()
-            .ok_or_else(|| "Enter a padding character.".to_string())?;
+            .ok_or_else(|| gettext("Enter a padding character."))?;
         Ok(RuleType::Pad(PadRule {
             length: length_spin.value() as usize,
             pad_char,
@@ -964,25 +988,25 @@ fn cleanup_form(existing: Option<CleanupRule>) -> Form {
     let seed = existing.unwrap_or_default();
 
     let collapse_switch = adw::SwitchRow::builder()
-        .title("Collapse repeated spaces")
+        .title(gettext("Collapse repeated spaces"))
         .active(seed.collapse_spaces)
         .build();
     let special_switch = adw::SwitchRow::builder()
-        .title("Remove special characters")
+        .title(gettext("Remove special characters"))
         .active(seed.remove_special)
         .build();
-    let preserve_entry = entry_row("Characters to preserve", &seed.preserve);
+    let preserve_entry = entry_row(&gettext("Characters to preserve"), &seed.preserve);
     let diacritics_switch = adw::SwitchRow::builder()
-        .title("Remove accents and diacritics")
+        .title(gettext("Remove accents and diacritics"))
         .active(seed.remove_diacritics)
         .build();
     let normalize_switch = adw::SwitchRow::builder()
-        .title("Normalize Unicode")
+        .title(gettext("Normalize Unicode"))
         .active(seed.normalize_unicode)
         .build();
     let space_dropdown = adw::ComboRow::builder()
-        .title("Spaces")
-        .model(&gtk::StringList::new(
+        .title(gettext("Spaces"))
+        .model(&translated_string_list(
             &SPACE_REPLACEMENTS.iter().map(|(_, name)| *name).collect::<Vec<_>>(),
         ))
         .selected(
@@ -993,7 +1017,7 @@ fn cleanup_form(existing: Option<CleanupRule>) -> Form {
         )
         .build();
 
-    let widget = vbox(&[&prefs_group!(Some("Clean Up"), &collapse_switch,
+    let widget = vbox(&[&prefs_group!(Some(gettext("Clean Up").as_str()), &collapse_switch,
             &space_dropdown,
             &special_switch,
             &preserve_entry,
@@ -1025,18 +1049,18 @@ fn rearrange_form(existing: Option<RearrangeRule>) -> Form {
         new_separator: "_".to_string(),
     });
 
-    let separator_entry = entry_row("Split on", &seed.separator);
+    let separator_entry = entry_row(&gettext("Split on"), &seed.separator);
     let order_text = seed
         .order
         .iter()
         .map(|i| (i + 1).to_string())
         .collect::<Vec<_>>()
         .join(", ");
-    let order_entry = entry_row("New order (e.g. 2, 1, 3)", &order_text);
-    let new_separator_entry = entry_row("Join with", &seed.new_separator);
+    let order_entry = entry_row(&gettext("New order (e.g. 2, 1, 3)"), &order_text);
+    let new_separator_entry = entry_row(&gettext("Join with"), &seed.new_separator);
 
     let help = gtk::Label::builder()
-        .label("The name is split on the separator; parts are numbered from 1. Parts left out of the order are dropped.")
+        .label(gettext("The name is split on the separator; parts are numbered from 1. Parts left out of the order are dropped."))
         .css_classes(vec!["dim-label", "caption"])
         .xalign(0.0)
         .wrap(true)
@@ -1046,13 +1070,18 @@ fn rearrange_form(existing: Option<RearrangeRule>) -> Form {
         .orientation(gtk::Orientation::Vertical)
         .spacing(12)
         .build();
-    box_.append(&prefs_group!(Some("Rearrange"), &separator_entry, &order_entry, &new_separator_entry));
+    box_.append(&prefs_group!(
+        Some(gettext("Rearrange").as_str()),
+        &separator_entry,
+        &order_entry,
+        &new_separator_entry
+    ));
     box_.append(&help);
 
     let collect = Box::new(move || {
         let separator = separator_entry.text().to_string();
         if separator.is_empty() {
-            return Err("Enter the separator to split on.".to_string());
+            return Err(gettext("Enter the separator to split on."));
         }
         let order: Result<Vec<usize>, String> = order_entry
             .text()
@@ -1062,12 +1091,16 @@ fn rearrange_form(existing: Option<RearrangeRule>) -> Form {
                     .parse::<usize>()
                     .ok()
                     .and_then(|n| n.checked_sub(1))
-                    .ok_or_else(|| "The order must be a comma-separated list of part numbers, starting at 1.".to_string())
+                    .ok_or_else(|| {
+                        gettext(
+                            "The order must be a comma-separated list of part numbers, starting at 1.",
+                        )
+                    })
             })
             .collect();
         let order = order?;
         if order.is_empty() {
-            return Err("Enter at least one part number.".to_string());
+            return Err(gettext("Enter at least one part number."));
         }
         Ok(RuleType::Rearrange(RearrangeRule {
             separator,
@@ -1122,24 +1155,27 @@ fn metadata_form(existing: Option<MetadataRule>) -> Form {
         .position(|(f, _)| std::mem::discriminant(f) == std::mem::discriminant(&seed.field))
         .unwrap_or(0);
     let field_dropdown = adw::ComboRow::builder()
-        .title("Metadata field")
-        .model(&gtk::StringList::new(
+        .title(gettext("Metadata field"))
+        .model(&translated_string_list(
             &METADATA_FIELDS.iter().map(|(_, name)| *name).collect::<Vec<_>>(),
         ))
         .selected(selected as u32)
         .build();
 
-    let format_entry = entry_row("Format (optional, for dates)", seed.format.as_deref().unwrap_or(""));
-    let fallback_entry = entry_row("Fallback if missing", &seed.fallback);
+    let format_entry = entry_row(
+        &gettext("Format (optional, for dates)"),
+        seed.format.as_deref().unwrap_or(""),
+    );
+    let fallback_entry = entry_row(&gettext("Fallback if missing"), &seed.fallback);
     let position_dropdown = adw::ComboRow::builder()
-        .title("Insert at")
-        .model(&gtk::StringList::new(&["Beginning (prefix)", "End (suffix)"]))
+        .title(gettext("Insert at"))
+        .model(&translated_string_list(&["Beginning (prefix)", "End (suffix)"]))
         .selected(if matches!(seed.position, InsertPosition::Suffix) { 1 } else { 0 })
         .build();
 
     let widget = vbox(&[
         &prefs_group!(None::<&str>, &field_dropdown),
-        &prefs_group!(Some("Options"), &format_entry, &fallback_entry, &position_dropdown),
+        &prefs_group!(Some(gettext("Options").as_str()), &format_entry, &fallback_entry, &position_dropdown),
     ]);
 
     let collect = Box::new(move || {
@@ -1174,14 +1210,14 @@ fn expression_form(existing: Option<ExpressionRule>) -> Form {
         expression: String::new(),
     });
 
-    let expression_entry = entry_row("Expression", &seed.expression);
+    let expression_entry = entry_row(&gettext("Expression"), &seed.expression);
 
     let help = gtk::Label::builder()
-        .label(
+        .label(gettext(
             "Variables: {name}, {ext}, {parent}, {size}, {counter}, {date}.\n\
              Functions: ${upper(name)}, ${lower(name)}, ${replace(name, \"a\", \"b\")}, \
              ${substr(name, 0, 5)}, ${trim(name)}, ${pad(counter, 3)}.",
-        )
+        ))
         .css_classes(vec!["dim-label", "caption"])
         .xalign(0.0)
         .wrap(true)
@@ -1191,13 +1227,13 @@ fn expression_form(existing: Option<ExpressionRule>) -> Form {
         .orientation(gtk::Orientation::Vertical)
         .spacing(12)
         .build();
-    box_.append(&prefs_group!(Some("Template"), &expression_entry));
+    box_.append(&prefs_group!(Some(gettext("Template").as_str()), &expression_entry));
     box_.append(&help);
 
     let collect = Box::new(move || {
         let expression = expression_entry.text().to_string();
         if expression.is_empty() {
-            return Err("Enter an expression template.".to_string());
+            return Err(gettext("Enter an expression template."));
         }
         Ok(RuleType::Expression(ExpressionRule { expression }))
     });
@@ -1220,8 +1256,8 @@ fn transliterate_form(existing: Option<TransliterateRule>) -> Form {
     });
 
     let dropdown = adw::ComboRow::builder()
-        .title("Conversion")
-        .model(&gtk::StringList::new(
+        .title(gettext("Conversion"))
+        .model(&translated_string_list(
             &TRANSLITERATIONS.iter().map(|(_, name)| *name).collect::<Vec<_>>(),
         ))
         .selected(
@@ -1232,7 +1268,7 @@ fn transliterate_form(existing: Option<TransliterateRule>) -> Form {
         )
         .build();
 
-    let widget = vbox(&[&prefs_group!(Some("Transliterate"), &dropdown)]);
+    let widget = vbox(&[&prefs_group!(Some(gettext("Transliterate").as_str()), &dropdown)]);
 
     let collect = Box::new(move || {
         Ok(RuleType::Transliterate(TransliterateRule {
@@ -1254,146 +1290,169 @@ pub fn rule_summary(rule_type: &RuleType) -> (String, String, String) {
     match rule_type {
         RuleType::Replace(r) => {
             let subtitle = if r.replace.is_empty() {
-                format!("Remove \"{}\"", r.find)
+                gettext("Remove \"{}\"").replacen("{}", &r.find, 1)
             } else {
                 format!("\"{}\" → \"{}\"", r.find, r.replace)
             };
-            ("Replace".into(), subtitle, "edit-find-replace-symbolic".into())
+            (gettext("Replace"), subtitle, "edit-find-replace-symbolic".into())
         }
         RuleType::ChangeCase(c) => (
-            "Change Case".into(),
-            case_type_label(c.case_type).into(),
+            gettext("Change Case"),
+            gettext(case_type_label(c.case_type)),
             "format-text-rich-symbolic".into(),
         ),
         RuleType::Insert(i) if matches!(i.text, InsertText::FileDate { .. }) => (
-            "Date/Time".into(),
+            gettext("Date/Time"),
             datetime_subtitle_for(i),
             "x-office-calendar-symbolic".into(),
         ),
         RuleType::Insert(i) => {
             let text = match &i.text {
                 InsertText::Fixed(t) => format!("\"{}\"", t),
-                InsertText::ParentFolder => "Parent folder name".into(),
-                InsertText::GrandparentFolder => "Grandparent folder name".into(),
-                _ => "Dynamic".into(),
+                InsertText::ParentFolder => gettext("Parent folder name"),
+                InsertText::GrandparentFolder => gettext("Grandparent folder name"),
+                _ => gettext("Dynamic"),
             };
             let pos = match &i.position {
-                InsertPosition::Prefix => "at beginning".into(),
-                InsertPosition::Suffix => "at end".into(),
-                InsertPosition::Position(p) => format!("at position {}", p),
-                _ => "custom".into(),
+                InsertPosition::Prefix => gettext("at beginning"),
+                InsertPosition::Suffix => gettext("at end"),
+                InsertPosition::Position(p) => {
+                    gettext("at position {}").replacen("{}", &p.to_string(), 1)
+                }
+                _ => gettext("custom"),
             };
-            ("Insert".into(), format!("{} {}", text, pos), "insert-text-symbolic".into())
+            (gettext("Insert"), format!("{} {}", text, pos), "insert-text-symbolic".into())
         }
         RuleType::Remove(r) => {
             let subtitle = match &r.target {
                 RemoveTarget::Text { text, .. } => format!("\"{}\"", text),
-                RemoveTarget::Pattern(p) => format!("Pattern /{}/", p),
-                RemoveTarget::FirstN(n) => format!("First {} chars", n),
-                RemoveTarget::LastN(n) => format!("Last {} chars", n),
-                RemoveTarget::Digits => "All digits".into(),
-                RemoveTarget::Whitespace => "All whitespace".into(),
-                RemoveTarget::LeadingZeros => "Leading zeros".into(),
-                RemoveTarget::Bracketed(_) => "Bracketed content".into(),
-                _ => "Custom".into(),
+                RemoveTarget::Pattern(p) => gettext("Pattern /{}/").replacen("{}", p, 1),
+                RemoveTarget::FirstN(n) => {
+                    gettext("First {} chars").replacen("{}", &n.to_string(), 1)
+                }
+                RemoveTarget::LastN(n) => {
+                    gettext("Last {} chars").replacen("{}", &n.to_string(), 1)
+                }
+                RemoveTarget::Digits => gettext("All digits"),
+                RemoveTarget::Whitespace => gettext("All whitespace"),
+                RemoveTarget::LeadingZeros => gettext("Leading zeros"),
+                RemoveTarget::Bracketed(_) => gettext("Bracketed content"),
+                _ => gettext("Custom"),
             };
-            ("Remove".into(), subtitle, "edit-delete-symbolic".into())
+            (gettext("Remove"), subtitle, "edit-delete-symbolic".into())
         }
         RuleType::Numbering(n) => {
             let pos = match &n.position {
-                InsertPosition::Prefix => "prefix",
-                InsertPosition::Suffix => "suffix",
-                _ => "custom",
+                InsertPosition::Prefix => gettext("prefix"),
+                InsertPosition::Suffix => gettext("suffix"),
+                _ => gettext("custom"),
             };
             (
-                "Numbering".into(),
-                format!("Start: {}, Pad: {} digits, {}", n.start, n.padding, pos),
+                gettext("Numbering"),
+                gettext("Start: {}, Pad: {} digits, {}")
+                    .replacen("{}", &n.start.to_string(), 1)
+                    .replacen("{}", &n.padding.to_string(), 1)
+                    .replacen("{}", &pos, 1),
                 "view-list-ordered-symbolic".into(),
             )
         }
         RuleType::Trim(t) => {
             let subtitle = match t.trim_type {
-                TrimType::Both => "Whitespace from both ends".into(),
-                TrimType::Start => "Whitespace from the start".into(),
-                TrimType::End => "Whitespace from the end".into(),
-                TrimType::Characters => format!(
-                    "Characters: {}",
-                    t.characters.as_deref().unwrap_or("")
-                ),
-                TrimType::MaxLength(n) => format!("Max length {}", n),
+                TrimType::Both => gettext("Whitespace from both ends"),
+                TrimType::Start => gettext("Whitespace from the start"),
+                TrimType::End => gettext("Whitespace from the end"),
+                TrimType::Characters => gettext("Characters: {}")
+                    .replacen("{}", t.characters.as_deref().unwrap_or(""), 1),
+                TrimType::MaxLength(n) => {
+                    gettext("Max length {}").replacen("{}", &n.to_string(), 1)
+                }
             };
-            ("Trim".into(), subtitle, "edit-cut-symbolic".into())
+            (gettext("Trim"), subtitle, "edit-cut-symbolic".into())
         }
         RuleType::Pad(p) => (
-            "Pad".into(),
-            format!(
-                "To {} chars with '{}' at {}",
-                p.length,
-                p.pad_char,
-                if p.pad_start { "start" } else { "end" }
-            ),
+            gettext("Pad"),
+            gettext("To {} chars with '{}' at {}")
+                .replacen("{}", &p.length.to_string(), 1)
+                .replacen("{}", &p.pad_char.to_string(), 1)
+                .replacen(
+                    "{}",
+                    &if p.pad_start { gettext("start") } else { gettext("end") },
+                    1,
+                ),
             "format-justify-fill-symbolic".into(),
         ),
         RuleType::Cleanup(c) => {
             let mut parts = Vec::new();
             if c.collapse_spaces {
-                parts.push("collapse spaces");
+                parts.push(gettext("collapse spaces"));
             }
             if c.remove_special {
-                parts.push("strip special chars");
+                parts.push(gettext("strip special chars"));
             }
             if c.remove_diacritics {
-                parts.push("strip accents");
+                parts.push(gettext("strip accents"));
             }
             if c.space_replacement.is_some() {
-                parts.push("replace spaces");
+                parts.push(gettext("replace spaces"));
             }
             let subtitle = if parts.is_empty() {
-                "Normalize".to_string()
+                gettext("Normalize")
             } else {
                 parts.join(", ")
             };
-            ("Clean Up".into(), subtitle, "edit-clear-symbolic".into())
+            (gettext("Clean Up"), subtitle, "edit-clear-symbolic".into())
         }
         RuleType::Rearrange(r) => (
-            "Rearrange".into(),
-            format!(
-                "Split on \"{}\", order {}",
-                r.separator,
-                r.order
-                    .iter()
-                    .map(|i| (i + 1).to_string())
-                    .collect::<Vec<_>>()
-                    .join("-")
-            ),
+            gettext("Rearrange"),
+            gettext("Split on \"{}\", order {}")
+                .replacen("{}", &r.separator, 1)
+                .replacen(
+                    "{}",
+                    &r.order
+                        .iter()
+                        .map(|i| (i + 1).to_string())
+                        .collect::<Vec<_>>()
+                        .join("-"),
+                    1,
+                ),
             "media-playlist-shuffle-symbolic".into(),
         ),
         RuleType::DateTime(d) => {
             let source = DATE_SOURCES
                 .iter()
                 .find(|(s, _)| (*s as usize) == (d.source as usize))
-                .map(|(_, name)| *name)
-                .unwrap_or("Date");
-            let pos = if matches!(d.position, InsertPosition::Suffix) { "suffix" } else { "prefix" };
-            ("Date/Time".into(), format!("{} as {}", source, pos), "x-office-calendar-symbolic".into())
+                .map(|(_, name)| gettext(*name))
+                .unwrap_or_else(|| gettext("Date"));
+            let pos = if matches!(d.position, InsertPosition::Suffix) {
+                gettext("suffix")
+            } else {
+                gettext("prefix")
+            };
+            (
+                gettext("Date/Time"),
+                gettext("{} as {}")
+                    .replacen("{}", &source, 1)
+                    .replacen("{}", &pos, 1),
+                "x-office-calendar-symbolic".into(),
+            )
         }
         RuleType::Metadata(m) => (
-            "Metadata".into(),
-            metadata_field_label(&m.field).to_string(),
+            gettext("Metadata"),
+            gettext(metadata_field_label(&m.field)),
             "camera-photo-symbolic".into(),
         ),
         RuleType::Expression(e) => (
-            "Expression".into(),
+            gettext("Expression"),
             e.expression.clone(),
             "utilities-terminal-symbolic".into(),
         ),
         RuleType::Transliterate(t) => (
-            "Transliterate".into(),
+            gettext("Transliterate"),
             TRANSLITERATIONS
                 .iter()
                 .find(|(m, _)| (*m as usize) == (t.mapping as usize))
-                .map(|(_, name)| (*name).to_string())
-                .unwrap_or_else(|| "Conversion".to_string()),
+                .map(|(_, name)| gettext(*name))
+                .unwrap_or_else(|| gettext("Conversion")),
             "font-x-generic-symbolic".into(),
         ),
     }
@@ -1404,17 +1463,19 @@ pub fn rule_summary(rule_type: &RuleType) -> (String, String, String) {
 pub fn datetime_subtitle_for(rule: &InsertRule) -> String {
     let source_name = match &rule.text {
         InsertText::FileDate { source, .. } => match source {
-            DateSource::Modified => "Modified date",
-            DateSource::Created => "Created date",
-            DateSource::Now => "Current date",
-            DateSource::ExifDateTaken => "EXIF date",
-            DateSource::Accessed => "Accessed date",
+            DateSource::Modified => gettext("Modified date"),
+            DateSource::Created => gettext("Created date"),
+            DateSource::Now => gettext("Current date"),
+            DateSource::ExifDateTaken => gettext("EXIF date"),
+            DateSource::Accessed => gettext("Accessed date"),
         },
-        _ => "Date",
+        _ => gettext("Date"),
     };
     let pos_name = match rule.position {
-        InsertPosition::Suffix => "suffix",
-        _ => "prefix",
+        InsertPosition::Suffix => gettext("suffix"),
+        _ => gettext("prefix"),
     };
-    format!("{} as {}", source_name, pos_name)
+    gettext("{} as {}")
+        .replacen("{}", &source_name, 1)
+        .replacen("{}", &pos_name, 1)
 }

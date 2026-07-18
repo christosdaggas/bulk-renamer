@@ -5,6 +5,7 @@
 
 use super::window::RenamerWindow;
 use crate::core::types::ThemePreference;
+use gettextrs::gettext;
 use libadwaita as adw;
 use adw::prelude::*;
 use gtk4 as gtk;
@@ -23,27 +24,27 @@ pub fn build(window: &RenamerWindow) -> gtk::PopoverMenu {
     menu.append_section(None, &theme_section);
 
     let presets_section = gio::Menu::new();
-    presets_section.append(Some("Save Preset…"), Some("win.save-preset"));
-    presets_section.append(Some("Load Preset…"), Some("win.load-preset"));
+    presets_section.append(Some(gettext("Save Preset…").as_str()), Some("win.save-preset"));
+    presets_section.append(Some(gettext("Load Preset…").as_str()), Some("win.load-preset"));
     menu.append_section(None, &presets_section);
 
     let tools_section = gio::Menu::new();
-    tools_section.append(Some("Import from CSV…"), Some("win.import-csv"));
-    tools_section.append(Some("Export Preview as CSV…"), Some("win.export-preview"));
-    tools_section.append(Some("Export Log…"), Some("win.export-log"));
-    tools_section.append(Some("Export Undo Script…"), Some("win.export-undo-script"));
+    tools_section.append(Some(gettext("Import from CSV…").as_str()), Some("win.import-csv"));
+    tools_section.append(Some(gettext("Export Preview as CSV…").as_str()), Some("win.export-preview"));
+    tools_section.append(Some(gettext("Export Log…").as_str()), Some("win.export-log"));
+    tools_section.append(Some(gettext("Export Undo Script…").as_str()), Some("win.export-undo-script"));
     menu.append_section(None, &tools_section);
 
     let history_section = gio::Menu::new();
-    history_section.append(Some("Undo Last Rename"), Some("win.undo"));
-    history_section.append(Some("Redo Rename"), Some("win.redo"));
-    history_section.append(Some("Rename History…"), Some("win.history"));
+    history_section.append(Some(gettext("Undo Last Rename").as_str()), Some("win.undo"));
+    history_section.append(Some(gettext("Redo Rename").as_str()), Some("win.redo"));
+    history_section.append(Some(gettext("Rename History…").as_str()), Some("win.history"));
     menu.append_section(None, &history_section);
 
     let app_section = gio::Menu::new();
-    app_section.append(Some("Preferences"), Some("win.preferences"));
-    app_section.append(Some("Keyboard Shortcuts"), Some("win.show-help-overlay"));
-    app_section.append(Some("About Bulk Renamer"), Some("win.about"));
+    app_section.append(Some(gettext("Preferences").as_str()), Some("win.preferences"));
+    app_section.append(Some(gettext("Keyboard Shortcuts").as_str()), Some("win.show-help-overlay"));
+    app_section.append(Some(gettext("About Bulk Renamer").as_str()), Some("win.about"));
     menu.append_section(None, &app_section);
 
     let popover = gtk::PopoverMenu::from_model(Some(&menu));
@@ -98,7 +99,7 @@ fn theme_selector(window: &RenamerWindow) -> gtk::Widget {
     for (idx, (_, css_class, tooltip)) in choices.iter().enumerate() {
         let button = gtk::ToggleButton::new();
         button.set_child(Some(&theme_content(css_class, idx == active)));
-        button.set_tooltip_text(Some(tooltip));
+        button.set_tooltip_text(Some(gettext(*tooltip).as_str()));
         button.add_css_class("flat");
         button.add_css_class("circular");
         button.add_css_class("theme-button");

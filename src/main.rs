@@ -34,6 +34,10 @@ fn main() -> glib::ExitCode {
     // Initialize tracing/logging
     init_tracing("info");
 
+    // Translations: the .mo catalogues live under the install prefix; the env
+    // override serves development builds (BULK_RENAMER_LOCALEDIR=target/locale).
+    init_i18n();
+
     // Initialize libadwaita
     adw::init().expect("Failed to initialize libadwaita");
 
@@ -50,6 +54,23 @@ fn main() -> glib::ExitCode {
     });
 
     app.run()
+}
+
+fn init_i18n() {
+    use gettextrs::{LocaleCategory, bind_textdomain_codeset, bindtextdomain, setlocale, textdomain};
+
+    setlocale(LocaleCategory::LcAll, "");
+    let locale_dir = std::env::var("BULK_RENAMER_LOCALEDIR").unwrap_or_else(|_| {
+        if std::path::Path::new("/app/share/locale").exists() {
+            // Flatpak prefix
+            "/app/share/locale".to_string()
+        } else {
+            "/usr/share/locale".to_string()
+        }
+    });
+    let _ = bindtextdomain("bulk-renamer", locale_dir);
+    let _ = bind_textdomain_codeset("bulk-renamer", "UTF-8");
+    let _ = textdomain("bulk-renamer");
 }
 
 fn register_resources() {

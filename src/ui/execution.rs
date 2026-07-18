@@ -7,6 +7,7 @@ use super::window::RenamerWindow;
 use crate::core::{FileEntry, RenamePreview};
 use crate::engine::RenameBatchResult;
 use crate::undo::UndoResult;
+use gettextrs::gettext;
 use libadwaita as adw;
 use adw::prelude::*;
 use gtk4 as gtk;
@@ -48,7 +49,7 @@ fn progress_window(
     let bar = gtk::ProgressBar::builder().show_text(true).build();
     content.append(&bar);
 
-    let cancel_btn = gtk::Button::with_label("Cancel");
+    let cancel_btn = gtk::Button::with_label(&gettext("Cancel"));
     cancel_btn.set_halign(gtk::Align::Center);
     content.append(&cancel_btn);
 
@@ -80,8 +81,8 @@ pub fn run_rename(
     window.set_busy(true);
 
     let cancel = Arc::new(AtomicBool::new(false));
-    let (dialog, bar, cancel_btn) = progress_window(window, "Renaming Files…");
-    bar.set_text(Some("Preparing…"));
+    let (dialog, bar, cancel_btn) = progress_window(window, &gettext("Renaming Files…"));
+    bar.set_text(Some(gettext("Preparing…").as_str()));
 
     {
         let cancel = cancel.clone();
@@ -89,7 +90,7 @@ pub fn run_rename(
         cancel_btn.connect_clicked(move |btn| {
             cancel.store(true, Ordering::Relaxed);
             btn.set_sensitive(false);
-            bar.set_text(Some("Cancelling…"));
+            bar.set_text(Some(gettext("Cancelling…").as_str()));
         });
     }
 
@@ -122,7 +123,10 @@ pub fn run_rename(
             }
             if total > 0 {
                 bar_clone.set_fraction(done as f64 / total as f64);
-                bar_clone.set_text(Some(&format!("{} of {} steps", done, total)));
+                let text = gettext("{} of {} steps")
+                    .replacen("{}", &done.to_string(), 1)
+                    .replacen("{}", &total.to_string(), 1);
+                bar_clone.set_text(Some(&text));
             }
         }
     });
@@ -138,11 +142,11 @@ pub fn run_rename(
         window.set_busy(false);
         match outcome {
             Ok(Ok(result)) if is_clean_cancellation(&result) => {
-                window.show_toast("Rename cancelled — no files were changed");
+                window.show_toast(&gettext("Rename cancelled — no files were changed"));
                 window.update_preview();
             }
             Ok(Ok(result)) => window.handle_rename_result(result),
-            Ok(Err(err)) => window.show_info_dialog("Rename Blocked", &err.to_string()),
+            Ok(Err(err)) => window.show_info_dialog(&gettext("Rename Blocked"), &err.to_string()),
             Err(_) => window.set_busy(false),
         }
     });
@@ -166,12 +170,12 @@ fn run_history(window: &RenamerWindow, op: HistoryOp) {
     window.set_busy(true);
 
     let title = match op {
-        HistoryOp::Undo | HistoryOp::UndoBatch(_) => "Undoing Rename…",
-        HistoryOp::Redo => "Redoing Rename…",
+        HistoryOp::Undo | HistoryOp::UndoBatch(_) => gettext("Undoing Rename…"),
+        HistoryOp::Redo => gettext("Redoing Rename…"),
     };
-    let (dialog, bar, cancel_btn) = progress_window(window, title);
+    let (dialog, bar, cancel_btn) = progress_window(window, &title);
     cancel_btn.set_visible(false);
-    bar.set_text(Some("Working…"));
+    bar.set_text(Some(gettext("Working…").as_str()));
 
     // Pulse while the dialog is up.
     let bar_weak = bar.downgrade();
@@ -216,37 +220,42 @@ fn run_history(window: &RenamerWindow, op: HistoryOp) {
         window.restore_undo_manager(manager);
         window.set_busy(false);
 
-        let (verb, done_title, partial_title, unavailable_title) = if is_undo {
-            ("Restored", "Undo Complete", "Undo Incomplete", "Undo Unavailable")
+        let (done_title, partial_title, unavailable_title) = if is_undo {
+            (
+                gettext("Undo Complete"),
+                gettext("Undo Incomplete"),
+                gettext("Undo Unavailable"),
+            )
         } else {
-            ("Renamed", "Redo Complete", "Redo Incomplete", "Redo Unavailable")
+            (
+                gettext("Redo Complete"),
+                gettext("Redo Incomplete"),
+                gettext("Redo Unavailable"),
+            )
         };
         match result {
             Ok(result) => {
-                let summary = if is_undo {
-                    format!(
-                        "{} {} of {} renamed files.",
-                        verb, result.success_count, result.total_records
-                    )
+                let template = if is_undo {
+                    gettext("Restored {} of {} renamed files.")
                 } else {
-                    format!(
-                        "{} {} of {} files again.",
-                        verb, result.success_count, result.total_records
-                    )
+                    gettext("Renamed {} of {} files again.")
                 };
+                let summary = template
+                    .replacen("{}", &result.success_count.to_string(), 1)
+                    .replacen("{}", &result.total_records.to_string(), 1);
                 if result.all_successful() {
                     window.show_toast(&summary);
                 } else {
                     let _ = done_title;
                     window.show_info_dialog(
-                        partial_title,
+                        &partial_title,
                         &RenamerWindow::undo_result_message(summary, &result),
                     );
                 }
                 window.update_history_actions();
                 window.update_preview();
             }
-            Err(err) => window.show_info_dialog(unavailable_title, &err.to_string()),
+            Err(err) => window.show_info_dialog(&unavailable_title, &err.to_string()),
         }
     });
 

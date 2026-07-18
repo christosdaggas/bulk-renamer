@@ -2,6 +2,7 @@
 
 use super::window::RenamerWindow;
 use crate::core::{FileEntry, RenamePreview, RenameStatus};
+use gettextrs::gettext;
 use libadwaita as adw;
 use adw::prelude::*;
 use gtk4 as gtk;
@@ -13,7 +14,7 @@ use uuid::Uuid;
 
 pub fn show_import_dialog(window: &RenamerWindow) {
     let dialog = gtk::FileDialog::builder()
-        .title("Import from CSV")
+        .title(gettext("Import from CSV"))
         .modal(true)
         .build();
 
@@ -36,7 +37,7 @@ pub fn show_import_dialog(window: &RenamerWindow) {
 
 pub fn show_export_dialog(window: &RenamerWindow) {
     let dialog = gtk::FileDialog::builder()
-        .title("Export Log")
+        .title(gettext("Export Log"))
         .modal(true)
         .build();
 
@@ -50,8 +51,9 @@ pub fn show_export_dialog(window: &RenamerWindow) {
                 if let Ok(file) = result {
                     if let Some(path) = file.path() {
                         match window.export_log_csv(&path) {
-                            Ok(()) => window.show_toast("Rename log exported to CSV"),
-                            Err(err) => window.show_info_dialog("Export Failed", &err.to_string()),
+                            Ok(()) => window.show_toast(&gettext("Rename log exported to CSV")),
+                            Err(err) => window
+                                .show_info_dialog(&gettext("Export Failed"), &err.to_string()),
                         }
                     }
                 }
@@ -66,11 +68,15 @@ fn import_csv_file(window: &RenamerWindow, path: PathBuf) {
             let count = previews.len();
             let dialog = adw::MessageDialog::new(
                 Some(window),
-                Some("Import CSV Renames"),
-                Some(&format!("Apply {} renames from the CSV file?", count)),
+                Some(gettext("Import CSV Renames").as_str()),
+                Some(
+                    gettext("Apply {} renames from the CSV file?")
+                        .replacen("{}", &count.to_string(), 1)
+                        .as_str(),
+                ),
             );
-            dialog.add_response("cancel", "Cancel");
-            dialog.add_response("rename", "Rename");
+            dialog.add_response("cancel", &gettext("Cancel"));
+            dialog.add_response("rename", &gettext("Rename"));
             dialog.set_response_appearance("rename", adw::ResponseAppearance::Suggested);
             dialog.connect_response(
                 None,
@@ -87,7 +93,7 @@ fn import_csv_file(window: &RenamerWindow, path: PathBuf) {
             );
             dialog.present();
         }
-        Err(err) => window.show_info_dialog("CSV Import Failed", &err.to_string()),
+        Err(err) => window.show_info_dialog(&gettext("CSV Import Failed"), &err.to_string()),
     }
 }
 
@@ -100,15 +106,13 @@ fn read_csv_rename_plan(
         .iter()
         .position(|header| header == "original_path")
         .ok_or_else(|| {
-            crate::core::RenamerError::Internal(
-                "CSV must include an original_path column".to_string(),
-            )
+            crate::core::RenamerError::Internal(gettext("CSV must include an original_path column"))
         })?;
     let name_idx = headers
         .iter()
         .position(|header| header == "new_name")
         .ok_or_else(|| {
-            crate::core::RenamerError::Internal("CSV must include a new_name column".to_string())
+            crate::core::RenamerError::Internal(gettext("CSV must include a new_name column"))
         })?;
 
     let mut previews = Vec::new();
@@ -147,12 +151,15 @@ fn read_csv_rename_plan(
 pub fn show_export_preview_dialog(window: &RenamerWindow) {
     let previews = window.previews_snapshot();
     if previews.is_empty() {
-        window.show_info_dialog("Nothing to Export", "Add files to build a preview first.");
+        window.show_info_dialog(
+            &gettext("Nothing to Export"),
+            &gettext("Add files to build a preview first."),
+        );
         return;
     }
 
     let dialog = gtk::FileDialog::builder()
-        .title("Export Preview as CSV")
+        .title(gettext("Export Preview as CSV"))
         .initial_name("rename-plan.csv")
         .modal(true)
         .build();
@@ -167,9 +174,9 @@ pub fn show_export_preview_dialog(window: &RenamerWindow) {
                 if let Ok(file) = result {
                     if let Some(path) = file.path() {
                         match write_preview_csv(&previews, &path) {
-                            Ok(()) => window.show_toast("Preview exported as CSV"),
+                            Ok(()) => window.show_toast(&gettext("Preview exported as CSV")),
                             Err(err) => {
-                                window.show_info_dialog("Export Failed", &err.to_string())
+                                window.show_info_dialog(&gettext("Export Failed"), &err.to_string())
                             }
                         }
                     }
@@ -202,12 +209,15 @@ fn write_preview_csv(previews: &[RenamePreview], path: &std::path::Path) -> crat
 /// Save a shell script that reverts the most recent rename batch.
 pub fn show_export_undo_script_dialog(window: &RenamerWindow) {
     let Some(script) = window.latest_undo_script() else {
-        window.show_info_dialog("No Undo Script", "No renames have been recorded yet.");
+        window.show_info_dialog(
+            &gettext("No Undo Script"),
+            &gettext("No renames have been recorded yet."),
+        );
         return;
     };
 
     let dialog = gtk::FileDialog::builder()
-        .title("Export Undo Script")
+        .title(gettext("Export Undo Script"))
         .initial_name("undo-rename.sh")
         .modal(true)
         .build();
@@ -234,9 +244,9 @@ pub fn show_export_undo_script_dialog(window: &RenamerWindow) {
                             Ok(())
                         });
                         match outcome {
-                            Ok(()) => window.show_toast("Undo script exported"),
+                            Ok(()) => window.show_toast(&gettext("Undo script exported")),
                             Err(err) => {
-                                window.show_info_dialog("Export Failed", &err.to_string())
+                                window.show_info_dialog(&gettext("Export Failed"), &err.to_string())
                             }
                         }
                     }

@@ -6,6 +6,7 @@ use crate::engine::{RenameEngine, RenameValidator};
 use crate::presets::Preset;
 use crate::undo::{RenameLogEntry, RenameLogger, UndoManager, UndoResult};
 use super::file_item::FileItem;
+use gettextrs::gettext;
 use glib::closure;
 use async_channel;
 use libadwaita as adw;
@@ -74,7 +75,7 @@ impl RenamerWindow {
             .property("application", app)
             .property("default-width", 1400)
             .property("default-height", 800)
-            .property("title", "Bulk Renamer")
+            .property("title", gettext("Bulk Renamer"))
             .build();
 
         window.setup_ui();
@@ -237,15 +238,18 @@ impl RenamerWindow {
 
         let dialog = adw::MessageDialog::new(
             Some(self),
-            Some("Interrupted Rename Detected"),
-            Some(&format!(
-                "A previous rename was interrupted and left {} file(s) under temporary names. \
-                 Restore them to their original names now?",
-                count
-            )),
+            Some(gettext("Interrupted Rename Detected").as_str()),
+            Some(
+                gettext(
+                    "A previous rename was interrupted and left {} file(s) under temporary names. \
+                     Restore them to their original names now?",
+                )
+                .replacen("{}", &count.to_string(), 1)
+                .as_str(),
+            ),
         );
-        dialog.add_response("later", "Later");
-        dialog.add_response("recover", "Restore");
+        dialog.add_response("later", &gettext("Later"));
+        dialog.add_response("recover", &gettext("Restore"));
         dialog.set_response_appearance("recover", adw::ResponseAppearance::Suggested);
         dialog.set_default_response(Some("recover"));
 
@@ -256,19 +260,24 @@ impl RenamerWindow {
                 if response == "recover" {
                     let outcome =
                         crate::engine::recover_interrupted(&crate::undo::default_data_dir());
-                    let mut message = format!("Restored {} file(s).", outcome.restored.len());
+                    let mut message = gettext("Restored {} file(s).")
+                        .replacen("{}", &outcome.restored.len().to_string(), 1);
                     for (path, reason) in outcome.failed.iter().take(5) {
                         message.push_str(&format!("\n\n{}: {}", path.display(), reason));
                     }
                     if outcome.failed.len() > 5 {
-                        message.push_str(&format!("\n\n…and {} more.", outcome.failed.len() - 5));
+                        message.push_str("\n\n");
+                        message.push_str(
+                            &gettext("…and {} more.")
+                                .replacen("{}", &(outcome.failed.len() - 5).to_string(), 1),
+                        );
                     }
                     let title = if outcome.failed.is_empty() {
-                        "Recovery Complete"
+                        gettext("Recovery Complete")
                     } else {
-                        "Recovery Incomplete"
+                        gettext("Recovery Incomplete")
                     };
-                    window.show_info_dialog(title, &message);
+                    window.show_info_dialog(&title, &message);
                 }
                 dialog.close();
             }
@@ -299,12 +308,12 @@ impl RenamerWindow {
         let header = adw::HeaderBar::new();
 
         // Title
-        let title = adw::WindowTitle::new("Bulk Renamer", "");
+        let title = adw::WindowTitle::new(&gettext("Bulk Renamer"), "");
         header.set_title_widget(Some(&title));
 
         // Right side: Rename button and menu
         let rename_btn = gtk::Button::builder()
-            .label("Rename")
+            .label(gettext("Rename"))
             .sensitive(false)
             .build();
         rename_btn.add_css_class("suggested-action");
@@ -320,7 +329,7 @@ impl RenamerWindow {
         // Menu button with custom popover
         let menu_btn = gtk::MenuButton::builder()
             .icon_name("open-menu-symbolic")
-            .tooltip_text("Menu")
+            .tooltip_text(gettext("Menu"))
             .build();
         menu_btn.add_css_class("flat");
 
@@ -338,7 +347,7 @@ impl RenamerWindow {
     fn show_about_dialog(&self) {
         let about = adw::AboutWindow::builder()
             .transient_for(self)
-            .application_name("Bulk Renamer")
+            .application_name(gettext("Bulk Renamer"))
             .application_icon("com.chrisdaggas.bulk-renamer")
             .version(env!("CARGO_PKG_VERSION"))
             .developer_name("Christos A. Daggas")
@@ -346,10 +355,10 @@ impl RenamerWindow {
             .website("https://chrisdaggas.com")
             .issue_url("https://github.com/christosdaggas/bulk-renamer/issues")
             .copyright("© 2024-2026 Christos A. Daggas")
-            .comments("A powerful bulk file renaming application for Linux")
+            .comments(gettext("A powerful bulk file renaming application for Linux"))
             .build();
 
-        about.add_credit_section(Some("Created by"), &["Christos A. Daggas"]);
+        about.add_credit_section(Some(gettext("Created by").as_str()), &["Christos A. Daggas"]);
         about.present();
     }
 
@@ -402,7 +411,7 @@ impl RenamerWindow {
             .build();
 
         let title_label = gtk::Label::builder()
-            .label("Files")
+            .label(gettext("Files"))
             .css_classes(vec!["title-4"])
             .hexpand(true)
             .xalign(0.0)
@@ -410,21 +419,21 @@ impl RenamerWindow {
 
         let add_files_btn = gtk::Button::builder()
             .icon_name("document-open-symbolic")
-            .tooltip_text("Add Files")
+            .tooltip_text(gettext("Add Files"))
             .build();
         add_files_btn.add_css_class("flat");
         add_files_btn.add_css_class("circular");
 
         let add_folder_btn = gtk::Button::builder()
             .icon_name("folder-open-symbolic")
-            .tooltip_text("Add Folder")
+            .tooltip_text(gettext("Add Folder"))
             .build();
         add_folder_btn.add_css_class("flat");
         add_folder_btn.add_css_class("circular");
 
         let clear_btn = gtk::Button::builder()
             .icon_name("edit-clear-all-symbolic")
-            .tooltip_text("Clear All")
+            .tooltip_text(gettext("Clear All"))
             .build();
         clear_btn.add_css_class("flat");
         clear_btn.add_css_class("circular");
@@ -439,7 +448,7 @@ impl RenamerWindow {
             ("Oldest First", "modified-asc"),
             ("Newest First", "modified-desc"),
         ] {
-            let item = gio::MenuItem::new(Some(label), None);
+            let item = gio::MenuItem::new(Some(gettext(label).as_str()), None);
             item.set_action_and_target_value(
                 Some("win.sort-files"),
                 Some(&target.to_variant()),
@@ -448,7 +457,7 @@ impl RenamerWindow {
         }
         let sort_btn = gtk::MenuButton::builder()
             .icon_name("view-sort-descending-symbolic")
-            .tooltip_text("Sort Files")
+            .tooltip_text(gettext("Sort Files"))
             .menu_model(&sort_menu)
             .build();
         sort_btn.add_css_class("flat");
@@ -471,12 +480,12 @@ impl RenamerWindow {
             .build();
 
         let files_count = gtk::Label::builder()
-            .label("0 files")
+            .label(gettext("{} files").replacen("{}", "0", 1))
             .css_classes(vec!["dim-label", "caption"])
             .build();
 
         let selected_count = gtk::Label::builder()
-            .label("0 selected")
+            .label(gettext("{} selected").replacen("{}", "0", 1))
             .css_classes(vec!["dim-label", "caption"])
             .build();
 
@@ -498,7 +507,7 @@ impl RenamerWindow {
             .build();
 
         let search_entry = gtk::SearchEntry::builder()
-            .placeholder_text("Filter by name (use * and ? for globs)")
+            .placeholder_text(gettext("Filter by name (use * and ? for globs)"))
             .hexpand(true)
             .build();
         search_entry.connect_search_changed(clone!(
@@ -511,9 +520,9 @@ impl RenamerWindow {
         ));
 
         let ext_entry = gtk::Entry::builder()
-            .placeholder_text("Extensions: jpg, png")
+            .placeholder_text(gettext("Extensions: jpg, png"))
             .width_chars(14)
-            .tooltip_text("Only rename files with these extensions (comma-separated)")
+            .tooltip_text(gettext("Only rename files with these extensions (comma-separated)"))
             .build();
         ext_entry.connect_changed(clone!(
             #[weak(rename_to = window)]
@@ -549,7 +558,7 @@ impl RenamerWindow {
 
             // Per-file inclusion: unchecked files are skipped by the batch.
             let include_check = gtk::CheckButton::builder()
-                .tooltip_text("Include in the rename")
+                .tooltip_text(gettext("Include in the rename"))
                 .build();
             let icon = gtk::Image::new();
             icon.add_css_class("dim-label");
@@ -612,8 +621,8 @@ impl RenamerWindow {
         // Empty state and list share a stack; refresh_file_count switches them.
         let placeholder = adw::StatusPage::builder()
             .icon_name("folder-documents-symbolic")
-            .title("No Files")
-            .description("Drop files here or click + to add")
+            .title(gettext("No Files"))
+            .description(gettext("Drop files here or click + to add"))
             .vexpand(true)
             .build();
         placeholder.add_css_class("compact");
@@ -649,13 +658,13 @@ impl RenamerWindow {
             .build();
 
         let select_all_btn = gtk::Button::builder()
-            .label("Select All")
+            .label(gettext("Select All"))
             .hexpand(true)
             .build();
         select_all_btn.add_css_class("flat");
 
         let remove_selected_btn = gtk::Button::builder()
-            .label("Remove Selected")
+            .label(gettext("Remove Selected"))
             .hexpand(true)
             .build();
         remove_selected_btn.add_css_class("flat");
@@ -760,7 +769,7 @@ impl RenamerWindow {
             .build();
 
         let title_label = gtk::Label::builder()
-            .label("Rules")
+            .label(gettext("Rules"))
             .css_classes(vec!["title-4"])
             .hexpand(true)
             .xalign(0.0)
@@ -768,14 +777,14 @@ impl RenamerWindow {
 
         let add_rule_btn = gtk::Button::builder()
             .icon_name("list-add-symbolic")
-            .tooltip_text("Add Rule")
+            .tooltip_text(gettext("Add Rule"))
             .build();
         add_rule_btn.add_css_class("flat");
         add_rule_btn.add_css_class("circular");
 
         let clear_rules_btn = gtk::Button::builder()
             .icon_name("edit-clear-all-symbolic")
-            .tooltip_text("Clear All Rules")
+            .tooltip_text(gettext("Clear All Rules"))
             .build();
         clear_rules_btn.add_css_class("flat");
         clear_rules_btn.add_css_class("circular");
@@ -799,8 +808,12 @@ impl RenamerWindow {
         target_group.set_margin_bottom(6);
 
         let target_row = adw::ComboRow::builder()
-            .title("Apply to")
-            .model(&gtk::StringList::new(&["Files only", "Folders only", "Both"]))
+            .title(gettext("Apply to"))
+            .model(&gtk::StringList::new(&[
+                gettext("Files only").as_str(),
+                gettext("Folders only").as_str(),
+                gettext("Both").as_str(),
+            ]))
             .build();
         target_group.add(&target_row);
         panel.append(&target_group);
@@ -823,7 +836,7 @@ impl RenamerWindow {
         rules_list.set_show_separators(false);
 
         rules_list.set_placeholder(Some(&gtk::Label::builder()
-            .label("No rules added\nClick + to add a rule")
+            .label(gettext("No rules added\nClick + to add a rule"))
             .css_classes(vec!["dim-label"])
             .margin_top(24)
             .margin_bottom(24)
@@ -843,7 +856,7 @@ impl RenamerWindow {
         options_group.set_margin_bottom(12);
 
         let ext_switch = adw::SwitchRow::builder()
-            .title("Process extension separately")
+            .title(gettext("Process extension separately"))
             .active(true)
             .build();
         options_group.add(&ext_switch);
@@ -904,7 +917,7 @@ impl RenamerWindow {
             .build();
 
         let title_label = gtk::Label::builder()
-            .label("Preview")
+            .label(gettext("Preview"))
             .css_classes(vec!["title-4"])
             .hexpand(true)
             .xalign(0.0)
@@ -912,7 +925,7 @@ impl RenamerWindow {
 
         let refresh_btn = gtk::Button::builder()
             .icon_name("view-refresh-symbolic")
-            .tooltip_text("Refresh Preview")
+            .tooltip_text(gettext("Refresh Preview"))
             .build();
         refresh_btn.add_css_class("flat");
         refresh_btn.add_css_class("circular");
@@ -931,7 +944,7 @@ impl RenamerWindow {
             .build();
 
         let preview_count = gtk::Label::builder()
-            .label("0 will be renamed")
+            .label(gettext("0 will be renamed"))
             .css_classes(vec!["dim-label", "caption"])
             .build();
 
@@ -942,14 +955,14 @@ impl RenamerWindow {
 
         // Conflict banner: one click renames collisions to "name (n)".
         let banner = adw::Banner::new("");
-        banner.set_button_label(Some("Add Numbers"));
+        banner.set_button_label(Some(gettext("Add Numbers").as_str()));
         banner.connect_button_clicked(clone!(
             #[weak(rename_to = window)]
             self,
             move |_| {
                 window.imp().auto_resolve_conflicts.set(true);
                 window.update_preview();
-                window.show_toast("Collisions are renamed with (n) suffixes");
+                window.show_toast(&gettext("Collisions are renamed with (n) suffixes"));
             }
         ));
         panel.append(&banner);
@@ -1009,7 +1022,8 @@ impl RenamerWindow {
                 .chain_property::<FileItem>("original-name")
                 .bind(&label, "label", None::<&gtk::Widget>);
         });
-        let original_col = gtk::ColumnViewColumn::new(Some("Original"), Some(original_factory));
+        let original_col =
+            gtk::ColumnViewColumn::new(Some(gettext("Original").as_str()), Some(original_factory));
         original_col.set_expand(true);
         column_view.append_column(&original_col);
 
@@ -1023,7 +1037,8 @@ impl RenamerWindow {
             };
             let label = gtk::EditableLabel::builder().build();
             label.set_tooltip_text(Some(
-                "Click to type a name for this file; clear it to follow the rules again",
+                gettext("Click to type a name for this file; clear it to follow the rules again")
+                    .as_str(),
             ));
             list_item.set_child(Some(&label));
 
@@ -1052,7 +1067,8 @@ impl RenamerWindow {
                 }
             });
         });
-        let new_col = gtk::ColumnViewColumn::new(Some("New Name"), Some(new_factory));
+        let new_col =
+            gtk::ColumnViewColumn::new(Some(gettext("New Name").as_str()), Some(new_factory));
         new_col.set_expand(true);
         column_view.append_column(&new_col);
 
@@ -1391,7 +1407,7 @@ impl RenamerWindow {
 
     pub fn show_add_files_dialog(&self) {
         let dialog = gtk::FileDialog::builder()
-            .title("Select Files")
+            .title(gettext("Select Files"))
             .modal(true)
             .build();
 
@@ -1412,7 +1428,7 @@ impl RenamerWindow {
 
     pub fn show_add_folder_dialog(&self) {
         let dialog = gtk::FileDialog::builder()
-            .title("Select Folder")
+            .title(gettext("Select Folder"))
             .modal(true)
             .build();
 
@@ -1589,7 +1605,7 @@ impl RenamerWindow {
     fn refresh_file_count(&self) {
         let count = self.imp().store.borrow().as_ref().map_or(0, |s| s.n_items());
         if let Some(label) = self.imp().files_count_label.borrow().as_ref() {
-            label.set_label(&format!("{} files", count));
+            label.set_label(&gettext("{} files").replacen("{}", &count.to_string(), 1));
         }
         if let Some(stack) = self.imp().files_stack.borrow().as_ref() {
             stack.set_visible_child_name(if count == 0 { "empty" } else { "list" });
@@ -1605,7 +1621,7 @@ impl RenamerWindow {
 
     fn update_selected_count(&self, count: usize) {
         if let Some(label) = self.imp().selected_count_label.borrow().as_ref() {
-            label.set_label(&format!("{} selected", count));
+            label.set_label(&gettext("{} selected").replacen("{}", &count.to_string(), 1));
         }
     }
 
@@ -1618,12 +1634,14 @@ impl RenamerWindow {
             .rev()
             .map(|batch| {
                 let count = batch.records.len();
-                let title = format!(
-                    "{} file{} — {}",
-                    count,
-                    if count == 1 { "" } else { "s" },
-                    batch.timestamp.format("%Y-%m-%d %H:%M")
-                );
+                let template = if count == 1 {
+                    gettext("{} file — {}")
+                } else {
+                    gettext("{} files — {}")
+                };
+                let title = template
+                    .replacen("{}", &count.to_string(), 1)
+                    .replacen("{}", &batch.timestamp.format("%Y-%m-%d %H:%M").to_string(), 1);
                 let mut sample = batch
                     .records
                     .iter()
@@ -1820,7 +1838,7 @@ impl RenamerWindow {
                     new_name: entry.original_name.clone(),
                     new_path: entry.path.clone(),
                     status: RenameStatus::Skipped,
-                    message: Some("Excluded from this batch".to_string()),
+                    message: Some(gettext("Excluded from this batch")),
                 });
                 continue;
             }
@@ -1830,7 +1848,7 @@ impl RenamerWindow {
                 new_name: entry.original_name.clone(),
                 new_path: entry.path.clone(),
                 status: RenameStatus::Unchanged,
-                message: Some("Filtered out".to_string()),
+                message: Some(gettext("Filtered out")),
             });
             if let Some(manual) = item.manual_override() {
                 preview.new_path = entry
@@ -1844,7 +1862,7 @@ impl RenamerWindow {
                     RenameStatus::WillRename
                 };
                 preview.new_name = manual;
-                preview.message = Some("Manually renamed".to_string());
+                preview.message = Some(gettext("Manually renamed"));
             }
             previews.push(preview);
         }
@@ -1888,10 +1906,13 @@ impl RenamerWindow {
             .count();
 
         if let Some(label) = self.imp().preview_count_label.borrow().as_ref() {
-            label.set_label(&format!(
-                "{} rename, {} unchanged, {} conflicts, {} errors",
-                will_rename, unchanged, conflicts, errors
-            ));
+            label.set_label(
+                &gettext("{} rename, {} unchanged, {} conflicts, {} errors")
+                    .replacen("{}", &will_rename.to_string(), 1)
+                    .replacen("{}", &unchanged.to_string(), 1)
+                    .replacen("{}", &conflicts.to_string(), 1)
+                    .replacen("{}", &errors.to_string(), 1),
+            );
         }
 
         if let Some(button) = self.imp().rename_button.borrow().as_ref() {
@@ -1900,11 +1921,12 @@ impl RenamerWindow {
 
         if let Some(banner) = self.imp().conflict_banner.borrow().as_ref() {
             if conflicts > 0 {
-                banner.set_title(&format!(
-                    "{} name{} collide with existing files",
-                    conflicts,
-                    if conflicts == 1 { "" } else { "s" }
-                ));
+                let template = if conflicts == 1 {
+                    gettext("{} name collide with existing files")
+                } else {
+                    gettext("{} names collide with existing files")
+                };
+                banner.set_title(&template.replacen("{}", &conflicts.to_string(), 1));
                 banner.set_revealed(true);
             } else {
                 banner.set_revealed(false);
@@ -1952,13 +1974,16 @@ impl RenamerWindow {
         };
 
         if to_rename_count == 0 {
-            self.show_info_dialog("Nothing to Rename", "No files will be renamed with the current rules.");
+            self.show_info_dialog(
+                &gettext("Nothing to Rename"),
+                &gettext("No files will be renamed with the current rules."),
+            );
             return;
         }
         if blocked {
             self.show_info_dialog(
-                "Rename Blocked",
-                "Resolve the conflicts and errors shown in the preview first.",
+                &gettext("Rename Blocked"),
+                &gettext("Resolve the conflicts and errors shown in the preview first."),
             );
             return;
         }
@@ -1970,12 +1995,16 @@ impl RenamerWindow {
 
         let dialog = adw::MessageDialog::new(
             Some(self),
-            Some("Confirm Rename"),
-            Some(&format!("Rename {} files?", to_rename_count)),
+            Some(gettext("Confirm Rename").as_str()),
+            Some(
+                gettext("Rename {} files?")
+                    .replacen("{}", &to_rename_count.to_string(), 1)
+                    .as_str(),
+            ),
         );
 
-        dialog.add_response("cancel", "Cancel");
-        dialog.add_response("rename", "Rename");
+        dialog.add_response("cancel", &gettext("Cancel"));
+        dialog.add_response("rename", &gettext("Rename"));
         dialog.set_response_appearance("rename", adw::ResponseAppearance::Suggested);
         dialog.set_default_response(Some("rename"));
 
@@ -2016,7 +2045,9 @@ impl RenamerWindow {
         }
 
         if error_count == 0 {
-            self.show_toast_with_undo(&format!("Renamed {} files", success_count));
+            self.show_toast_with_undo(
+                &gettext("Renamed {} files").replacen("{}", &success_count.to_string(), 1),
+            );
         } else {
             let details = result
                 .failures
@@ -2031,12 +2062,12 @@ impl RenamerWindow {
                 })
                 .collect::<Vec<_>>()
                 .join("\n");
+            let summary = gettext("Renamed {} files successfully, {} failed.")
+                .replacen("{}", &success_count.to_string(), 1)
+                .replacen("{}", &error_count.to_string(), 1);
             self.show_info_dialog(
-                "Rename Completed with Errors",
-                &format!(
-                    "Renamed {} files successfully, {} failed.\n{}",
-                    success_count, error_count, details
-                ),
+                &gettext("Rename Completed with Errors"),
+                &format!("{}\n{}", summary, details),
             );
         }
 
@@ -2115,7 +2146,7 @@ impl RenamerWindow {
     pub(crate) fn show_toast_with_undo(&self, message: &str) {
         if let Some(overlay) = self.imp().toast_overlay.borrow().as_ref() {
             let toast = adw::Toast::new(message);
-            toast.set_button_label(Some("Undo"));
+            toast.set_button_label(Some(gettext("Undo").as_str()));
             toast.set_action_name(Some("win.undo"));
             overlay.add_toast(toast);
         }
@@ -2136,7 +2167,7 @@ impl RenamerWindow {
 
     pub(crate) fn show_info_dialog(&self, title: &str, message: &str) {
         let dialog = adw::MessageDialog::new(Some(self), Some(title), Some(message));
-        dialog.add_response("ok", "OK");
+        dialog.add_response("ok", &gettext("OK"));
         dialog.set_default_response(Some("ok"));
         dialog.present();
     }
@@ -2164,10 +2195,11 @@ impl RenamerWindow {
             message.push_str(&format!("\n\n{}", reason));
         }
         if reasons.len() > MAX_REASONS {
-            message.push_str(&format!(
-                "\n\n…and {} more.",
-                reasons.len() - MAX_REASONS
-            ));
+            message.push_str("\n\n");
+            message.push_str(
+                &gettext("…and {} more.")
+                    .replacen("{}", &(reasons.len() - MAX_REASONS).to_string(), 1),
+            );
         }
         message
     }
@@ -2212,8 +2244,8 @@ impl RenamerWindow {
 
         let dialog = adw::MessageDialog::new(
             Some(self),
-            Some("Add Rule"),
-            Some("Select the type of rule to add:"),
+            Some(gettext("Add Rule").as_str()),
+            Some(gettext("Select the type of rule to add:").as_str()),
         );
 
         let list = gtk::ListBox::builder()
@@ -2223,8 +2255,8 @@ impl RenamerWindow {
 
         for (_, icon, name, desc) in RuleKind::catalog() {
             let row = adw::ActionRow::builder()
-                .title(*name)
-                .subtitle(*desc)
+                .title(gettext(*name))
+                .subtitle(gettext(*desc))
                 .activatable(true)
                 .build();
             row.add_prefix(&gtk::Image::from_icon_name(icon));
@@ -2238,7 +2270,7 @@ impl RenamerWindow {
             .child(&list)
             .build();
         dialog.set_extra_child(Some(&scroll));
-        dialog.add_response("cancel", "Cancel");
+        dialog.add_response("cancel", &gettext("Cancel"));
         dialog.present();
 
         let dialog_clone = dialog.clone();
@@ -2428,7 +2460,7 @@ impl RenamerWindow {
         let drag_handle = gtk::Image::from_icon_name("list-drag-handle-symbolic");
         drag_handle.add_css_class("dim-label");
         drag_handle.add_css_class("drag-handle");
-        drag_handle.set_tooltip_text(Some("Drag to reorder"));
+        drag_handle.set_tooltip_text(Some(gettext("Drag to reorder").as_str()));
         row_box.append(&drag_handle);
 
         // Icon
@@ -2467,7 +2499,7 @@ impl RenamerWindow {
         let enable_switch = gtk::Switch::builder()
             .active(enabled)
             .valign(gtk::Align::Center)
-            .tooltip_text("Enable this rule")
+            .tooltip_text(gettext("Enable this rule"))
             .build();
         row_box.append(&enable_switch);
 
@@ -2476,14 +2508,14 @@ impl RenamerWindow {
         edit_btn.add_css_class("flat");
         edit_btn.add_css_class("circular");
         edit_btn.set_valign(gtk::Align::Center);
-        edit_btn.set_tooltip_text(Some("Edit rule"));
+        edit_btn.set_tooltip_text(Some(gettext("Edit rule").as_str()));
 
         // Delete button
         let delete_btn = gtk::Button::from_icon_name("edit-delete-symbolic");
         delete_btn.add_css_class("flat");
         delete_btn.add_css_class("circular");
         delete_btn.set_valign(gtk::Align::Center);
-        delete_btn.set_tooltip_text(Some("Remove rule"));
+        delete_btn.set_tooltip_text(Some(gettext("Remove rule").as_str()));
 
         row_box.append(&edit_btn);
         row_box.append(&delete_btn);
@@ -2669,7 +2701,7 @@ impl RenamerWindow {
             self.rebuild_rules_list(rules_list);
         }
         self.request_preview();
-        self.show_toast(&format!("Loaded preset '{}'", preset.name));
+        self.show_toast(&gettext("Loaded preset '{}'").replacen("{}", &preset.name, 1));
     }
 
     fn show_import_csv_dialog(&self) {

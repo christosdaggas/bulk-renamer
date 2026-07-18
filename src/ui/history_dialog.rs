@@ -1,6 +1,7 @@
 //! Rename history browser with per-batch undo.
 
 use super::window::RenamerWindow;
+use gettextrs::gettext;
 use libadwaita as adw;
 use adw::prelude::*;
 use gtk4 as gtk;
@@ -8,12 +9,15 @@ use gtk4 as gtk;
 pub fn show(window: &RenamerWindow) {
     let entries = window.undo_history();
     if entries.is_empty() {
-        window.show_info_dialog("No History", "No renames have been recorded yet.");
+        window.show_info_dialog(
+            &gettext("No History"),
+            &gettext("No renames have been recorded yet."),
+        );
         return;
     }
 
     let dialog = adw::Window::builder()
-        .title("Rename History")
+        .title(gettext("Rename History"))
         .default_width(520)
         .default_height(480)
         .modal(true)
@@ -39,7 +43,7 @@ pub fn show(window: &RenamerWindow) {
             .subtitle(&subtitle)
             .build();
 
-        let undo_btn = gtk::Button::with_label("Undo");
+        let undo_btn = gtk::Button::with_label(&gettext("Undo"));
         undo_btn.set_valign(gtk::Align::Center);
         undo_btn.add_css_class("flat");
 

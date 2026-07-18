@@ -12,6 +12,9 @@ if [[ ! -f target/release/bulk-renamer ]]; then
     cargo build --release
 fi
 
+# Compile translations; the deb assets in Cargo.toml ship them from target/locale
+bash scripts/compile-translations.sh target/locale
+
 # Generate DEB
 cargo deb
 

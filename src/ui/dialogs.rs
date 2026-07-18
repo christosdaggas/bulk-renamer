@@ -1,5 +1,6 @@
 //! Dialog components.
 
+use gettextrs::gettext;
 use libadwaita as adw;
 use adw::prelude::*;
 use gtk4 as gtk;
@@ -10,7 +11,7 @@ const APP_ID: &str = "com.chrisdaggas.bulk-renamer";
 /// Create the about dialog.
 pub fn create_about_dialog() -> adw::AboutWindow {
     adw::AboutWindow::builder()
-        .application_name("Bulk Renamer")
+        .application_name(gettext("Bulk Renamer"))
         .application_icon(APP_ID)
         .version(env!("CARGO_PKG_VERSION"))
         .developer_name("Christos A. Daggas")
@@ -42,13 +43,13 @@ pub fn create_progress_dialog(parent: &impl IsA<gtk::Window>, title: &str) -> ad
     box_.append(&progress);
 
     let status = gtk::Label::builder()
-        .label("Processing...")
+        .label(gettext("Processing..."))
         .css_classes(vec!["dim-label"])
         .build();
     box_.append(&status);
 
     dialog.set_extra_child(Some(&box_));
-    dialog.add_response("cancel", "Cancel");
+    dialog.add_response("cancel", &gettext("Cancel"));
 
     dialog
 }

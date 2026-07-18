@@ -1,6 +1,7 @@
 //! Application preferences dialog.
 
 use super::window::RenamerWindow;
+use gettextrs::gettext;
 use libadwaita as adw;
 use adw::prelude::*;
 use gtk4 as gtk;
@@ -9,7 +10,7 @@ use gtk4 as gtk;
 pub fn show(window: &RenamerWindow) {
     let settings = window.settings_snapshot();
     let dialog = adw::Window::builder()
-        .title("Preferences")
+        .title(gettext("Preferences"))
         .default_width(520)
         .default_height(520)
         .modal(true)
@@ -18,9 +19,9 @@ pub fn show(window: &RenamerWindow) {
 
     let toolbar_view = adw::ToolbarView::new();
     let header = adw::HeaderBar::new();
-    let cancel_btn = gtk::Button::with_label("Cancel");
+    let cancel_btn = gtk::Button::with_label(&gettext("Cancel"));
     cancel_btn.add_css_class("flat");
-    let save_btn = gtk::Button::with_label("Save");
+    let save_btn = gtk::Button::with_label(&gettext("Save"));
     save_btn.add_css_class("suggested-action");
     header.pack_start(&cancel_btn);
     header.pack_end(&save_btn);
@@ -28,18 +29,18 @@ pub fn show(window: &RenamerWindow) {
 
     let page = adw::PreferencesPage::new();
 
-    let behavior = adw::PreferencesGroup::builder().title("Behavior").build();
+    let behavior = adw::PreferencesGroup::builder().title(gettext("Behavior")).build();
     let confirm_row = adw::SwitchRow::builder()
-        .title("Confirm Before Rename")
+        .title(gettext("Confirm Before Rename"))
         .active(settings.confirm_before_rename)
         .build();
     let live_preview_row = adw::SwitchRow::builder()
-        .title("Live Preview")
-        .subtitle("Recompute the preview automatically after every change")
+        .title(gettext("Live Preview"))
+        .subtitle(gettext("Recompute the preview automatically after every change"))
         .active(settings.live_preview)
         .build();
     let show_unchanged_row = adw::SwitchRow::builder()
-        .title("Show Unchanged Files")
+        .title(gettext("Show Unchanged Files"))
         .active(settings.show_unchanged_files)
         .build();
     behavior.add(&confirm_row);
@@ -47,21 +48,21 @@ pub fn show(window: &RenamerWindow) {
     behavior.add(&show_unchanged_row);
     page.add(&behavior);
 
-    let files = adw::PreferencesGroup::builder().title("Files").build();
+    let files = adw::PreferencesGroup::builder().title(gettext("Files")).build();
     let hidden_row = adw::SwitchRow::builder()
-        .title("Include Hidden Files")
+        .title(gettext("Include Hidden Files"))
         .active(settings.show_hidden_files)
         .build();
     let symlink_row = adw::SwitchRow::builder()
-        .title("Follow Symlinks")
+        .title(gettext("Follow Symlinks"))
         .active(settings.follow_symlinks)
         .build();
     let metadata_row = adw::SwitchRow::builder()
-        .title("Load Metadata")
+        .title(gettext("Load Metadata"))
         .active(settings.metadata_loading_enabled)
         .build();
     let depth_row = adw::SpinRow::builder()
-        .title("Folder Scan Depth")
+        .title(gettext("Folder Scan Depth"))
         .adjustment(&gtk::Adjustment::new(
             settings.recursive_folder_depth as f64,
             1.0,
@@ -78,15 +79,15 @@ pub fn show(window: &RenamerWindow) {
     page.add(&files);
 
     let history = adw::PreferencesGroup::builder()
-        .title("History and Logs")
+        .title(gettext("History and Logs"))
         .build();
     let undo_row = adw::SwitchRow::builder()
-        .title("Persist Undo History")
-        .subtitle("Undo always works during a session; this keeps it across restarts")
+        .title(gettext("Persist Undo History"))
+        .subtitle(gettext("Undo always works during a session; this keeps it across restarts"))
         .active(settings.undo_persistence_enabled)
         .build();
     let log_row = adw::SwitchRow::builder()
-        .title("Log Rename Operations")
+        .title(gettext("Log Rename Operations"))
         .active(settings.log_operations)
         .build();
     history.add(&undo_row);
